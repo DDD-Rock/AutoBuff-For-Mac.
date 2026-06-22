@@ -1,5 +1,7 @@
 # Xcode
 build/
+build.log
+.derivedData/
 DerivedData/
 *.xcuserstate
 *.xcbkptlist
@@ -19,3 +21,6 @@ Package.resolved
 *.ipa
 *.dSYM.zip
 *.dSYM
+
+# LLVM coverage
+*.profraw

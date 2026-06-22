@@ -6,6 +6,8 @@
 //
 
 import XCTest
+import ApplicationServices
+import AppKit
 
 final class AutoBuffUITests: XCTestCase {
 
@@ -24,11 +26,37 @@ final class AutoBuffUITests: XCTestCase {
 
     @MainActor
     func testExample() throws {
-        // UI tests must launch the application that they test.
         let app = XCUIApplication()
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 3))
+        let elements = app.descendants(matching: .any)
+        XCTAssertTrue(elements["app.title"].exists)
+        XCTAssertTrue(elements["window.identify"].exists)
+        let workerButton = elements["worker.toggle"]
+        XCTAssertTrue(workerButton.exists)
+        XCTAssertGreaterThan(workerButton.frame.width, 400)
+        XCTAssertTrue(elements["settings.title"].exists)
+        XCTAssertTrue(elements["mode.dead"].exists)
+        XCTAssertTrue(elements["mode.live"].exists)
+    }
+
+    @MainActor
+    func testDurationFieldStartsUnfocusedAndBlankTapDismissesFocus() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let durationField = app.textFields["buff.duration.1"]
+        XCTAssertTrue(durationField.waitForExistence(timeout: 3))
+        XCTAssertNotEqual(focusedRole(for: app), kAXTextFieldRole as String)
+
+        durationField.click()
+        XCTAssertEqual(focusedRole(for: app), kAXTextFieldRole as String)
+
+        let subtitle = app.staticTexts["app.subtitle"]
+        XCTAssertTrue(subtitle.exists)
+        subtitle.click()
+        XCTAssertNotEqual(focusedRole(for: app), kAXTextFieldRole as String)
     }
 
     @MainActor
@@ -39,5 +67,35 @@ final class AutoBuffUITests: XCTestCase {
                 XCUIApplication().launch()
             }
         }
+    }
+
+    private func focusedRole(for app: XCUIApplication) -> String? {
+        guard let processID = NSRunningApplication
+            .runningApplications(withBundleIdentifier: "cc.juanwang.AutoBuff")
+            .first?
+            .processIdentifier else {
+            return nil
+        }
+        let application = AXUIElementCreateApplication(processID)
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            application,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedValue
+        ) == .success,
+              let focusedValue else {
+            return nil
+        }
+
+        let focusedElement = unsafeBitCast(focusedValue, to: AXUIElement.self)
+        var roleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXRoleAttribute as CFString,
+            &roleValue
+        ) == .success else {
+            return nil
+        }
+        return roleValue as? String
     }
 }
