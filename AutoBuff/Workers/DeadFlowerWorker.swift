@@ -1,6 +1,17 @@
 import CoreGraphics
 import Foundation
 
+enum PortalNavigation {
+    // ScreenCaptureKit captures this app at Quartz point resolution. On a
+    // Retina display, the Windows baseline's 5 native pixels are about 2.5
+    // captured points. Keeping 5 here stops the character visibly too early.
+    static let arrivalTolerance: CGFloat = 2.5
+
+    static func hasArrived(playerX: CGFloat, portalX: CGFloat) -> Bool {
+        abs(portalX - playerX) <= arrivalTolerance
+    }
+}
+
 @available(macOS 14.0, *)
 @MainActor
 final class DeadFlowerWorker: ObservableObject {
@@ -20,7 +31,6 @@ final class DeadFlowerWorker: ObservableObject {
     private var runID = UUID()
     private(set) var isRunning = false
     
-    private let tolerance: CGFloat = 5
     private let batchCastWindow = 10.0
     private let blackScreenWait = 2.5
     private let sceneCheckInterval = 2.0
@@ -266,11 +276,12 @@ final class DeadFlowerWorker: ObservableObject {
         
         let initialDistance = portal.x - initialPlayer.x
         log("导航坐标: 玩家X=\(format(initialPlayer.x))，传送门X=\(format(portal.x))，距离=\(format(initialDistance))")
-        if abs(initialDistance) <= tolerance {
+        if PortalNavigation.hasArrived(playerX: initialPlayer.x, portalX: portal.x) {
             guard await ensureGameFocus(windowID: windowID, reason: "进入传送门") else {
                 log("❌ 进入传送门前无法确认游戏窗口焦点")
                 return false
             }
+            log("已到达传送门范围，按上键进入（距离=\(format(initialDistance))）")
             await human.usePortal()
             enteredPortal = true
         } else {
@@ -323,7 +334,7 @@ final class DeadFlowerWorker: ObservableObject {
             if attempt % 10 == 0 {
                 log("导航中: 玩家X=\(format(player.x))，目标X=\(format(portal.x))，距离=\(format(distance))")
             }
-            if abs(distance) <= tolerance {
+            if PortalNavigation.hasArrived(playerX: player.x, portalX: portal.x) {
                 await human.stopMove()
                 currentDirection = nil
                 await randomSleep(0.1...0.3)
@@ -331,6 +342,7 @@ final class DeadFlowerWorker: ObservableObject {
                     log("❌ 进入传送门前无法确认游戏窗口焦点")
                     break
                 }
+                log("已到达传送门范围，按上键进入（距离=\(format(distance))）")
                 await human.usePortal()
                 enteredPortal = true
                 break
@@ -351,7 +363,8 @@ final class DeadFlowerWorker: ObservableObject {
                 stuckCount = 0
             }
             
-            let neededDirection: HumanInput.Direction = distance > tolerance ? .right : .left
+            let neededDirection: HumanInput.Direction =
+                distance > PortalNavigation.arrivalTolerance ? .right : .left
             if currentDirection != neededDirection {
                 if currentDirection != nil {
                     log("已越过目标，切换移动方向")

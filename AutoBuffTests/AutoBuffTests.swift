@@ -129,6 +129,11 @@ struct SettingsManagerTests {
         #expect(point == CGPoint(x: 200, y: 350))
     }
 
+    @Test func portalArrivalUsesPointResolutionTolerance() {
+        #expect(PortalNavigation.hasArrived(playerX: 30, portalX: 32.5))
+        #expect(!PortalNavigation.hasArrived(playerX: 30, portalX: 35))
+    }
+
     @Test func keyCodeMapUsesRealMacKeyPositions() {
         #expect(KeyCodeMap.virtualKeyCode(for: "A") == 0x00)
         #expect(KeyCodeMap.virtualKeyCode(for: "B") == 0x0B)
