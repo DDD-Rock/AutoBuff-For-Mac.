@@ -20,7 +20,7 @@ struct DebugPanelView: View {
                     Button("检测市场按钮") {
                         Task { await DebugTools.testReturnToMarket(windowID: viewModel.selectedWindow?.windowID, log: viewModel.appendLog) }
                     }
-                    Button("检测确定按钮") {
+                    Button("关闭弹窗") {
                         Task { await DebugTools.testDismissDialog(windowID: viewModel.selectedWindow?.windowID, log: viewModel.appendLog) }
                     }
                 }

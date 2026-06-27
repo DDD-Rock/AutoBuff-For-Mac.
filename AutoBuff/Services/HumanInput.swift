@@ -66,6 +66,20 @@ actor HumanInput {
     func pressNamedKey(_ key: String) throws -> TimeInterval {
         try KeyboardUtils.pressKey(key)
     }
+
+    @discardableResult
+    func pressNamedKeyDown(_ key: String) throws -> CGKeyCode {
+        let name = KeyCodeMap.resolveKeyName(key)
+        guard let keyCode = KeyCodeMap.virtualKeyCode(for: name) else {
+            throw KeyboardUtils.InputError.unsupportedKey(key)
+        }
+        KeyboardUtils.postKey(keyCode, keyDown: true)
+        return keyCode
+    }
+
+    func releaseKey(_ keyCode: CGKeyCode) {
+        KeyboardUtils.postKey(keyCode, keyDown: false)
+    }
     
     func releaseAll() {
         currentDirection = nil

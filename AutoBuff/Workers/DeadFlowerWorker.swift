@@ -122,8 +122,11 @@ final class DeadFlowerWorker: ObservableObject {
                 var didCast = false
                 if inMonsterMap {
                     let batch = buffsToCast(buffs: buffs, nextCast: nextCast, includeUpcoming: true)
-                    await castAllReady(buffs: batch, nextCast: &nextCast)
-                    didCast = true
+                    didCast = await castAllReady(
+                        buffs: batch,
+                        nextCast: &nextCast,
+                        windowID: windowID
+                    )
                     isSitting = false
                 } else if inMarket {
                     let manualPortal = manualPortalPoint(from: settings)
@@ -135,8 +138,11 @@ final class DeadFlowerWorker: ObservableObject {
                     ) {
                         await preSkillMove(settings.preSkillMoveMode)
                         let batch = buffsToCast(buffs: buffs, nextCast: nextCast, includeUpcoming: true)
-                        await castAllReady(buffs: batch, nextCast: &nextCast)
-                        didCast = true
+                        didCast = await castAllReady(
+                            buffs: batch,
+                            nextCast: &nextCast,
+                            windowID: windowID
+                        )
                         isSitting = false
                     } else {
                         log("离开市场失败，5 秒后重试")
@@ -149,7 +155,7 @@ final class DeadFlowerWorker: ObservableObject {
                 
                 if didCast {
                     log("等待技能后摇结束...")
-                    await randomSleep(0.8...1.0)
+                    await randomSleep(1.2...1.8)
                     var returned = false
                     for attempt in 1...10 where isRunning {
                         if await returnToMarket(cachedButton: &cachedButtonScreen) {
@@ -172,9 +178,7 @@ final class DeadFlowerWorker: ObservableObject {
                 let now = Date().timeIntervalSince1970
                 if !dialogCheckDone && now - lastDialogCheck >= 5 {
                     lastDialogCheck = now
-                    if let point = try? await dialogDetector.findConfirmButtonScreenPoint() {
-                        log("检测到弹窗，自动点击确定")
-                        await human.clickAt(screenPoint: point, offsetRange: 5)
+                    if await dismissDialogIfPresent(windowID: windowID) {
                         dialogMissCount = 0
                     } else {
                         dialogMissCount += 1
@@ -213,6 +217,35 @@ final class DeadFlowerWorker: ObservableObject {
     private func manualPortalPoint(from settings: AppSettings) -> CGPoint? {
         guard let x = settings.manualPortalX, let y = settings.manualPortalY else { return nil }
         return CGPoint(x: x, y: y)
+    }
+
+    private func dismissDialogIfPresent(windowID: CGWindowID) async -> Bool {
+        guard var point = try? await dialogDetector.findConfirmButtonScreenPoint() else {
+            return false
+        }
+
+        log("检测到弹窗，自动点击确定")
+        for attempt in 1...2 where isRunning && !Task.isCancelled {
+            guard await ensureGameFocus(windowID: windowID, reason: "关闭弹窗") else {
+                log("❌ 关闭弹窗前无法确认游戏窗口焦点")
+                return true
+            }
+            await sleep(0.15)
+            if attempt > 1,
+               let refreshedPoint = try? await dialogDetector.findConfirmButtonScreenPoint() {
+                point = refreshedPoint
+            }
+            await human.clickAt(screenPoint: point, offsetRange: 3)
+            await sleep(0.25)
+            if (try? await dialogDetector.findConfirmButtonScreenPoint()) == nil {
+                log("弹窗已关闭")
+                return true
+            }
+            if attempt == 1 {
+                log("弹窗仍在，准备再次点击确定")
+            }
+        }
+        return true
     }
     
     private func leaveMarket(
@@ -269,6 +302,16 @@ final class DeadFlowerWorker: ObservableObject {
             }
             await sleep(0.2)
         }
+        if initialPlayer == nil {
+            log("导航前黄点被遮挡，尝试跳跃定位...")
+            if let jumpedPlayer = await findPlayerPositionDuringJump(
+                jumpKey: jumpKey,
+                windowID: windowID
+            ) {
+                initialPlayer = jumpedPlayer
+                log("跳跃时定位到玩家: X=\(format(jumpedPlayer.x))")
+            }
+        }
         guard let initialPlayer else {
             log("❌ 导航前无法定位玩家：\(minimap.lastPlayerDetectionSummary)")
             return false
@@ -309,25 +352,38 @@ final class DeadFlowerWorker: ObservableObject {
                 log("✅ 游戏窗口焦点已恢复，继续导航")
             }
 
-            guard let player = try? await minimap.findPlayerPosition() else {
+            var recoveredByJump = false
+            var detectedPlayer = try? await minimap.findPlayerPosition()
+            if detectedPlayer == nil {
                 missingPlayerCount += 1
                 if currentDirection != nil {
                     await human.stopMove()
                     currentDirection = nil
                 }
+                lastPlayerX = nil
+                stuckCount = 0
                 if missingPlayerCount == 1 || missingPlayerCount % 5 == 0 {
-                    log("⚠️ 丢失玩家黄点 \(missingPlayerCount) 次，已停止移动：\(minimap.lastPlayerDetectionSummary)")
+                    log("⚠️ 丢失玩家黄点 \(missingPlayerCount) 次，已停止移动，尝试跳跃定位：\(minimap.lastPlayerDetectionSummary)")
                 }
-                if missingPlayerCount >= 15 {
-                    log("❌ 连续无法定位玩家，终止本次导航")
-                    break
+                detectedPlayer = await findPlayerPositionDuringJump(
+                    jumpKey: jumpKey,
+                    windowID: windowID
+                )
+                recoveredByJump = detectedPlayer != nil
+                if detectedPlayer == nil {
+                    if missingPlayerCount >= 15 {
+                        log("❌ 连续无法定位玩家，终止本次导航")
+                        break
+                    }
+                    await randomSleep(0.15...0.25)
+                    continue
                 }
-                await randomSleep(0.15...0.25)
-                continue
             }
+            guard let player = detectedPlayer else { continue }
             
             if missingPlayerCount > 0 {
-                log("已重新定位玩家: X=\(format(player.x))")
+                let prefix = recoveredByJump ? "跳跃时重新定位玩家" : "已重新定位玩家"
+                log("\(prefix): X=\(format(player.x))")
             }
             missingPlayerCount = 0
             let distance = portal.x - player.x
@@ -398,6 +454,41 @@ final class DeadFlowerWorker: ObservableObject {
         log("⚠️ 离开市场超时")
         return false
     }
+
+    private func findPlayerPositionDuringJump(
+        jumpKey: String,
+        windowID: CGWindowID
+    ) async -> CGPoint? {
+        guard isRunning, !Task.isCancelled else { return nil }
+        guard await ensureGameFocus(windowID: windowID, reason: "跳跃定位") else {
+            log("❌ 跳跃定位前无法确认游戏窗口焦点")
+            return nil
+        }
+
+        let jumpDuration = Double.random(in: 0.08...0.16)
+        let sampleDelay = min(jumpDuration, Double.random(in: 0.04...0.08))
+        let keyCode: CGKeyCode
+        do {
+            keyCode = try await human.pressNamedKeyDown(jumpKey)
+        } catch {
+            onError?("跳跃键错误: \(error.localizedDescription)")
+            return nil
+        }
+
+        await sleep(sampleDelay)
+        let player: CGPoint?
+        if isRunning && !Task.isCancelled {
+            player = try? await minimap.findPlayerPosition()
+        } else {
+            player = nil
+        }
+        await human.releaseKey(keyCode)
+        let remaining = jumpDuration - sampleDelay
+        if remaining > 0 {
+            await sleep(remaining)
+        }
+        return player
+    }
     
     private func format(_ value: CGFloat) -> String {
         String(format: "%.1f", value)
@@ -447,7 +538,7 @@ final class DeadFlowerWorker: ObservableObject {
             await wiggle(.left)
         }
         await human.stopMove()
-        await randomSleep(0.3...0.8)
+        await randomSleep(0.5...1.0)
     }
     
     private func wiggle(_ direction: HumanInput.Direction) async {
@@ -511,22 +602,29 @@ final class DeadFlowerWorker: ObservableObject {
     
     private func castAllReady(
         buffs: [BuffConfig],
-        nextCast: inout [Int: TimeInterval]
-    ) async {
-        guard !buffs.isEmpty else { return }
+        nextCast: inout [Int: TimeInterval],
+        windowID: CGWindowID
+    ) async -> Bool {
+        guard !buffs.isEmpty else { return false }
         log("准备释放 \(buffs.count) 个技能")
+        guard await ensureGameFocus(windowID: windowID, reason: "释放技能") else {
+            log("❌ 释放技能前无法确认游戏窗口焦点")
+            return false
+        }
         for (index, buff) in buffs.enumerated() where isRunning {
             log("释放技能: \(buff.key)")
             do {
-                let pressedAt = try await human.pressNamedKey(buff.key)
+                try await human.pressNamedKey(buff.key)
+                await randomSleep(0.1...0.3)
+                let finalPressedAt = try await human.pressNamedKey(buff.key)
                 let releaseAt = CountdownTiming.nextRelease(
-                    pressedAt: pressedAt,
+                    pressedAt: finalPressedAt,
                     interval: buff.duration
                 )
                 nextCast[buff.id] = releaseAt
-                countdownPublisher.replaceDeadlines(nextCast, now: pressedAt)
+                countdownPublisher.replaceDeadlines(nextCast, now: finalPressedAt)
                 log(
-                    "技能 \(buff.key) 倒计时 \(CountdownTiming.remainingSeconds(until: releaseAt, now: pressedAt)) 秒，"
+                    "技能 \(buff.key) 倒计时 \(CountdownTiming.remainingSeconds(until: releaseAt, now: finalPressedAt)) 秒，"
                     + "下次释放 \(CountdownTiming.clockText(for: releaseAt))"
                 )
             } catch {
@@ -536,6 +634,7 @@ final class DeadFlowerWorker: ObservableObject {
                 await randomSleep(1.0...2.0)
             }
         }
+        return true
     }
     
     private func refreshCachesIfWindowChanged(

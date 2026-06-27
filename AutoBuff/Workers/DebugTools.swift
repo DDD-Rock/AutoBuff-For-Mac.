@@ -48,10 +48,34 @@ enum DebugTools {
         log("调试: 测试弹窗检测...")
         let dialog = DialogDetector()
         dialog.setWindow(windowID)
-        if let pos = try? await dialog.findConfirmButtonScreenPoint() {
-            log("确定按钮: \(Int(pos.x)), \(Int(pos.y))")
-        } else {
+        guard var pos = try? await dialog.findConfirmButtonScreenPoint() else {
             log("未检测到弹窗")
+            return
         }
+
+        log("确定按钮: \(Int(pos.x)), \(Int(pos.y))，正在点击...")
+        let windowSelector = WindowSelector()
+        let human = HumanInput()
+        if !windowSelector.bringWindowToFront(windowID: windowID) {
+            log("⚠️ 无法将游戏窗口置于前台，仍会尝试点击")
+        }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        for attempt in 1...2 {
+            if attempt > 1,
+               let refreshedPos = try? await dialog.findConfirmButtonScreenPoint() {
+                pos = refreshedPos
+            }
+            await human.clickAt(screenPoint: pos, offsetRange: 3)
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if (try? await dialog.findConfirmButtonScreenPoint()) == nil {
+                log("弹窗已关闭")
+                return
+            }
+            if attempt == 1 {
+                log("弹窗仍在，准备再次点击")
+            }
+        }
+        log("⚠️ 已点击确定，但弹窗仍被检测到")
     }
 }
