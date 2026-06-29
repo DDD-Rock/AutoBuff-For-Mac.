@@ -2,7 +2,7 @@ import Foundation
 
 enum AppConstants {
     static let appName = "AutoBuff"
-    static let appVersion = "2.0.0"
+    static let appVersion = "2.0.1"
 
     static let defaultInterval: Double = 5.0
     static let defaultRandomDelay: Double = 2.0

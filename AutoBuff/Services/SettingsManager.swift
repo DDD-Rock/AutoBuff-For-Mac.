@@ -36,6 +36,7 @@ final class SettingsManager {
 
     private func normalize(_ settings: AppSettings) -> AppSettings {
         var copy = settings
+        copy.returnToMarket = copy.mode == .deadFlower
         while copy.buffs.count > AppConstants.defaultBuffSlotCount,
               let last = copy.buffs.last,
               !last.enabled,

@@ -34,7 +34,7 @@ final class MinimapMonitor {
         let captured = try await captureService.captureBGR(windowID: windowID)
         windowBounds = captured.windowBounds
         let result = await Task.detached(priority: .userInitiated, operation: {
-            ColorDetector.detectDarkRegion(in: captured.buffer)
+            ColorDetector.detectMinimapRegion(in: captured.buffer)
         }).value
         lastDetectionSummary = result.summary
         if let rect = result.rect {

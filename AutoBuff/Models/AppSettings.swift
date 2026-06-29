@@ -1,4 +1,19 @@
+import CoreGraphics
 import Foundation
+
+enum AppMode: String, Codable, CaseIterable {
+    case deadFlower = "dead"
+    case liveFlower = "live"
+    case followHeal = "follow_heal"
+
+    var title: String {
+        switch self {
+        case .deadFlower: return "死花模式"
+        case .liveFlower: return "活花模式"
+        case .followHeal: return "跟补模式"
+        }
+    }
+}
 
 enum MovementMode: String, Codable, CaseIterable {
     case none
@@ -29,12 +44,22 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
+    var mode: AppMode = .deadFlower
     var returnToMarket: Bool = true
     var jumpKey: String = "Alt"
+    var healSkillKey: String = ""
+    var healAnchorX: Int? = nil
+    var healAnchorY: Int? = nil
+    var healMinimapRegionX: Int? = nil
+    var healMinimapRegionY: Int? = nil
+    var healMinimapRegionWidth: Int? = nil
+    var healMinimapRegionHeight: Int? = nil
     var sitChairEnabled: Bool = false
     var chairKey: String = "="
     var randomBehaviorEnabled: Bool = true
     var randomBehaviorValue: Int = 20
+    var followHealAdjustMinMS: Int = 200
+    var followHealAdjustMaxMS: Int = 300
     var movementMode: MovementMode = .none
     var preSkillMoveMode: PreSkillMoveMode = .rightOnly
     var manualPortalX: Int? = nil
@@ -46,5 +71,118 @@ struct AppSettings: Codable, Equatable {
         buffs[0] = BuffConfig(id: 1, enabled: true, key: "1", duration: 200)
         buffs[1] = BuffConfig(id: 2, enabled: true, key: "2", duration: 200)
         return AppSettings(buffs: buffs)
+    }
+}
+
+extension AppSettings {
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case returnToMarket
+        case jumpKey
+        case healSkillKey
+        case healAnchorX
+        case healAnchorY
+        case healMinimapRegionX
+        case healMinimapRegionY
+        case healMinimapRegionWidth
+        case healMinimapRegionHeight
+        case sitChairEnabled
+        case chairKey
+        case randomBehaviorEnabled
+        case randomBehaviorValue
+        case followHealAdjustMinMS
+        case followHealAdjustMaxMS
+        case movementMode
+        case preSkillMoveMode
+        case manualPortalX
+        case manualPortalY
+        case buffs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let returnToMarket = try container.decodeIfPresent(Bool.self, forKey: .returnToMarket) ?? true
+        self.mode = try container.decodeIfPresent(AppMode.self, forKey: .mode)
+            ?? (returnToMarket ? .deadFlower : .liveFlower)
+        self.returnToMarket = returnToMarket
+        self.jumpKey = try container.decodeIfPresent(String.self, forKey: .jumpKey) ?? "Alt"
+        self.healSkillKey = try container.decodeIfPresent(String.self, forKey: .healSkillKey) ?? ""
+        self.healAnchorX = try container.decodeIfPresent(Int.self, forKey: .healAnchorX)
+        self.healAnchorY = try container.decodeIfPresent(Int.self, forKey: .healAnchorY)
+        self.healMinimapRegionX = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionX)
+        self.healMinimapRegionY = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionY)
+        self.healMinimapRegionWidth = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionWidth)
+        self.healMinimapRegionHeight = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionHeight)
+        self.sitChairEnabled = try container.decodeIfPresent(Bool.self, forKey: .sitChairEnabled) ?? false
+        self.chairKey = try container.decodeIfPresent(String.self, forKey: .chairKey) ?? "="
+        self.randomBehaviorEnabled = try container.decodeIfPresent(Bool.self, forKey: .randomBehaviorEnabled) ?? true
+        self.randomBehaviorValue = try container.decodeIfPresent(Int.self, forKey: .randomBehaviorValue) ?? 20
+        self.followHealAdjustMinMS = try container.decodeIfPresent(Int.self, forKey: .followHealAdjustMinMS) ?? 200
+        self.followHealAdjustMaxMS = try container.decodeIfPresent(Int.self, forKey: .followHealAdjustMaxMS) ?? 300
+        self.movementMode = try container.decodeIfPresent(MovementMode.self, forKey: .movementMode) ?? .none
+        self.preSkillMoveMode = try container.decodeIfPresent(PreSkillMoveMode.self, forKey: .preSkillMoveMode) ?? .rightOnly
+        self.manualPortalX = try container.decodeIfPresent(Int.self, forKey: .manualPortalX)
+        self.manualPortalY = try container.decodeIfPresent(Int.self, forKey: .manualPortalY)
+        self.buffs = try container.decodeIfPresent([BuffConfig].self, forKey: .buffs) ?? AppSettings.default.buffs
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(returnToMarket, forKey: .returnToMarket)
+        try container.encode(jumpKey, forKey: .jumpKey)
+        try container.encode(healSkillKey, forKey: .healSkillKey)
+        try container.encodeIfPresent(healAnchorX, forKey: .healAnchorX)
+        try container.encodeIfPresent(healAnchorY, forKey: .healAnchorY)
+        try container.encodeIfPresent(healMinimapRegionX, forKey: .healMinimapRegionX)
+        try container.encodeIfPresent(healMinimapRegionY, forKey: .healMinimapRegionY)
+        try container.encodeIfPresent(healMinimapRegionWidth, forKey: .healMinimapRegionWidth)
+        try container.encodeIfPresent(healMinimapRegionHeight, forKey: .healMinimapRegionHeight)
+        try container.encode(sitChairEnabled, forKey: .sitChairEnabled)
+        try container.encode(chairKey, forKey: .chairKey)
+        try container.encode(randomBehaviorEnabled, forKey: .randomBehaviorEnabled)
+        try container.encode(randomBehaviorValue, forKey: .randomBehaviorValue)
+        try container.encode(followHealAdjustMinMS, forKey: .followHealAdjustMinMS)
+        try container.encode(followHealAdjustMaxMS, forKey: .followHealAdjustMaxMS)
+        try container.encode(movementMode, forKey: .movementMode)
+        try container.encode(preSkillMoveMode, forKey: .preSkillMoveMode)
+        try container.encodeIfPresent(manualPortalX, forKey: .manualPortalX)
+        try container.encodeIfPresent(manualPortalY, forKey: .manualPortalY)
+        try container.encode(buffs, forKey: .buffs)
+    }
+}
+
+extension AppSettings {
+    var followHealAdjustDurationMS: ClosedRange<Int> {
+        let minValue = max(50, min(followHealAdjustMinMS, followHealAdjustMaxMS))
+        let maxValue = min(1000, max(followHealAdjustMinMS, followHealAdjustMaxMS))
+        return minValue...maxValue
+    }
+
+    var healMinimapRegion: CGRect? {
+        get {
+            guard let x = healMinimapRegionX,
+                  let y = healMinimapRegionY,
+                  let width = healMinimapRegionWidth,
+                  let height = healMinimapRegionHeight,
+                  width > 0,
+                  height > 0 else {
+                return nil
+            }
+            return CGRect(x: x, y: y, width: width, height: height)
+        }
+        set {
+            guard let newValue else {
+                healMinimapRegionX = nil
+                healMinimapRegionY = nil
+                healMinimapRegionWidth = nil
+                healMinimapRegionHeight = nil
+                return
+            }
+            healMinimapRegionX = Int(newValue.minX.rounded())
+            healMinimapRegionY = Int(newValue.minY.rounded())
+            healMinimapRegionWidth = Int(newValue.width.rounded())
+            healMinimapRegionHeight = Int(newValue.height.rounded())
+        }
     }
 }

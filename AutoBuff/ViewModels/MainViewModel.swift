@@ -3,18 +3,6 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
-enum AppMode: String, CaseIterable {
-    case deadFlower = "dead"
-    case liveFlower = "live"
-
-    var title: String {
-        switch self {
-        case .deadFlower: return "死花模式"
-        case .liveFlower: return "活花模式"
-        }
-    }
-}
-
 @available(macOS 14.0, *)
 @MainActor
 final class MainViewModel: ObservableObject {
@@ -31,6 +19,7 @@ final class MainViewModel: ObservableObject {
     @Published var showWindowPicker = false
     @Published var showVirtualKeyboard = false
     @Published var showPortalMarker = false
+    @Published var showFollowHealMarker = false
     @Published var isCheckingPortalMarker = false
     @Published var portalMarkerAlert: PortalMarkerAlert?
     @Published var keyboardTarget: KeyboardTarget = .buff(0)
@@ -42,11 +31,13 @@ final class MainViewModel: ObservableObject {
     private let windowSelector = WindowSelector()
     private let liveWorker = LiveFlowerWorker()
     private let deadWorker = DeadFlowerWorker()
+    private let followHealWorker = FollowHealWorker()
 
     enum KeyboardTarget: Equatable {
         case buff(Int)
         case jumpKey
         case chairKey
+        case healSkillKey
     }
 
     struct PortalMarkerAlert: Identifiable {
@@ -56,7 +47,7 @@ final class MainViewModel: ObservableObject {
 
     init() {
         settings = settingsManager.load()
-        mode = settings.returnToMarket ? .deadFlower : .liveFlower
+        mode = settings.mode
         wireWorkers()
         refreshPermissions()
         if accessibilityUsesAdHocSignature {
@@ -102,6 +93,7 @@ final class MainViewModel: ObservableObject {
     func setMode(_ newMode: AppMode) {
         guard !isRunning else { return }
         mode = newMode
+        settings.mode = newMode
         settings.returnToMarket = newMode == .deadFlower
         saveSettings()
     }
@@ -151,8 +143,8 @@ final class MainViewModel: ObservableObject {
             requestAccessibility()
             return
         }
-        if mode == .deadFlower && !screenRecordingGranted {
-            appendLog("死花模式需要屏幕录制权限")
+        if (mode == .deadFlower || mode == .followHeal) && !screenRecordingGranted {
+            appendLog("\(mode.title)需要屏幕录制权限")
             requestScreenRecording()
             return
         }
@@ -161,6 +153,7 @@ final class MainViewModel: ObservableObject {
             validationErrors.forEach(appendLog)
             return
         }
+        settings.mode = mode
         settings.returnToMarket = mode == .deadFlower
         saveSettings()
         isRunning = true
@@ -179,12 +172,16 @@ final class MainViewModel: ObservableObject {
         case .deadFlower:
             deadWorker.start(settings: settings, windowID: window.windowID)
             appendLog("死花模式已启动")
+        case .followHeal:
+            followHealWorker.start(settings: settings, windowID: window.windowID)
+            appendLog("跟补模式已启动")
         }
     }
 
     func stopWorker() {
         liveWorker.stop()
         deadWorker.stop()
+        followHealWorker.stop()
         isRunning = false
         countdowns = [:]
         appendLog("已停止")
@@ -216,6 +213,8 @@ final class MainViewModel: ObservableObject {
             settings.jumpKey = key
         case .chairKey:
             settings.chairKey = key
+        case .healSkillKey:
+            settings.healSkillKey = key
         }
         saveSettings()
     }
@@ -258,6 +257,21 @@ final class MainViewModel: ObservableObject {
                 message: "无法确认当前地图，请检查屏幕录制权限和游戏窗口后重试。"
             )
         }
+    }
+
+    func requestFollowHealMarker() {
+        guard !isRunning else { return }
+        guard let window = selectedWindow else {
+            portalMarkerAlert = PortalMarkerAlert(message: "请先识别游戏窗口。")
+            return
+        }
+        guard windowSelector.isWindowValid(windowID: window.windowID) else {
+            selectedWindow = nil
+            windowStatusText = "未识别"
+            portalMarkerAlert = PortalMarkerAlert(message: "游戏窗口已失效，请重新识别。")
+            return
+        }
+        showFollowHealMarker = true
     }
 
     func addBuff() {
@@ -314,6 +328,14 @@ final class MainViewModel: ObservableObject {
             self?.isRunning = false
             self?.countdowns = [:]
         }
+
+        followHealWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
+        followHealWorker.onCountdown = { [weak self] info in self?.countdowns = info }
+        followHealWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
+        followHealWorker.onStopped = { [weak self] in
+            self?.isRunning = false
+            self?.countdowns = [:]
+        }
     }
 
     private func validateEnabledBuffs() -> [String] {
@@ -335,6 +357,16 @@ final class MainViewModel: ObservableObject {
         }
         if mode == .deadFlower && KeyCodeMap.virtualKeyCode(for: settings.jumpKey) == nil {
             errors.append("跳跃键“\(settings.jumpKey)”不受支持")
+        }
+        if mode == .followHeal {
+            if settings.healSkillKey.isEmpty {
+                errors.append("请设置加血技能键")
+            } else if KeyCodeMap.virtualKeyCode(for: settings.healSkillKey) == nil {
+                errors.append("加血技能键“\(settings.healSkillKey)”不受支持")
+            }
+            if settings.healAnchorX == nil {
+                errors.append("请先标记跟补基准点")
+            }
         }
         return errors
     }

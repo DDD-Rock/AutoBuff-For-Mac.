@@ -74,7 +74,7 @@ struct ContentView: View {
                     windowID: window.windowID,
                     existingX: viewModel.settings.manualPortalX,
                     existingY: viewModel.settings.manualPortalY
-                ) { x, y in
+                ) { x, y, _ in
                     viewModel.settings.manualPortalX = x
                     viewModel.settings.manualPortalY = y
                     viewModel.saveSettings()
@@ -82,6 +82,29 @@ struct ContentView: View {
                         viewModel.appendLog("传送门已标记: \(x), \(y)")
                     } else {
                         viewModel.appendLog("已清除手动传送门标记")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $viewModel.showFollowHealMarker) {
+            if let window = viewModel.selectedWindow {
+                PortalMarkerView(
+                    windowID: window.windowID,
+                    existingX: viewModel.settings.healAnchorX,
+                    existingY: viewModel.settings.healAnchorY,
+                    title: "标记跟补基准点",
+                    showAutoPortal: false,
+                    clearButtonTitle: "清除基准点",
+                    loadedStatusText: "红点=跟补基准点，运行时只使用该点的 X 坐标"
+                ) { x, y, region in
+                    viewModel.settings.healAnchorX = x
+                    viewModel.settings.healAnchorY = y
+                    viewModel.settings.healMinimapRegion = (x != nil && y != nil) ? region : nil
+                    viewModel.saveSettings()
+                    if let x, let y {
+                        viewModel.appendLog("跟补基准点已标记: \(x), \(y)")
+                    } else {
+                        viewModel.appendLog("已清除跟补基准点")
                     }
                 }
             }
@@ -222,7 +245,7 @@ struct ContentView: View {
     }
 
     private var modeSelector: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             modeButton(
                 .deadFlower,
                 icon: "arrow.uturn.backward.circle.fill",
@@ -233,6 +256,11 @@ struct ContentView: View {
                 icon: "repeat.circle.fill",
                 subtitle: "在当前地图循环释放"
             )
+            modeButton(
+                .followHeal,
+                icon: "heart.circle.fill",
+                subtitle: "自动补血并回位"
+            )
         }
     }
 
@@ -242,21 +270,22 @@ struct ContentView: View {
             guard !viewModel.isRunning else { return }
             viewModel.setMode(mode)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 21))
+                    .font(.system(size: 19))
                     .foregroundStyle(selected ? AppTheme.accent : AppTheme.textSecondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(mode.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AppTheme.textPrimary)
                     Text(subtitle)
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                         .foregroundStyle(AppTheme.textSecondary)
+                        .lineLimit(2)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(12)
+            .padding(10)
             .frame(maxWidth: .infinity, minHeight: 50)
             .background(selected ? AppTheme.accentSoft : AppTheme.panel)
             .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))

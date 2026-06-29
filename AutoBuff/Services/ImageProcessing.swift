@@ -341,6 +341,9 @@ enum ColorDetector {
             if let rect, let threshold {
                 return "小地图区域 x=\(Int(rect.minX)), y=\(Int(rect.minY)), w=\(Int(rect.width)), h=\(Int(rect.height))，灰度阈值=\(threshold)"
             }
+            if let rect {
+                return "小地图区域 x=\(Int(rect.minX)), y=\(Int(rect.minY)), w=\(Int(rect.width)), h=\(Int(rect.height))"
+            }
             if let bestCandidate {
                 return "未找到合格区域；候选数=\(candidateCount)，最佳候选 x=\(Int(bestCandidate.minX)), y=\(Int(bestCandidate.minY)), w=\(Int(bestCandidate.width)), h=\(Int(bestCandidate.height))，矩形度=\(String(format: "%.2f", bestRectangularity))"
             }
@@ -406,20 +409,148 @@ enum ColorDetector {
         }
         return blobs.max(by: { $0.area < $1.area })?.centroid
     }
+
+    static func detectMinimapRegion(
+        in image: ImageBuffer,
+        searchWidth: Int = 320,
+        searchHeight: Int = 360
+    ) -> DarkRegionDetectionResult {
+        if let frameRegion = detectMinimapByWhiteFrame(
+            in: image,
+            searchWidth: searchWidth,
+            searchHeight: searchHeight
+        ) {
+            return frameRegion
+        }
+        if let markerRegion = detectMinimapByDarkComponentsAndMarkers(
+            in: image,
+            searchWidth: searchWidth,
+            searchHeight: searchHeight
+        ) {
+            return markerRegion
+        }
+        return detectDarkRegion(
+            in: image,
+            searchWidth: 480,
+            searchHeight: 360
+        )
+    }
+
+    private struct BrightRun {
+        let y: Int
+        let startX: Int
+        let endX: Int
+
+        var width: Int { endX - startX + 1 }
+    }
+
+    private static func detectMinimapByWhiteFrame(
+        in image: ImageBuffer,
+        searchWidth: Int,
+        searchHeight: Int
+    ) -> DarkRegionDetectionResult? {
+        let sw = min(searchWidth, image.width)
+        let sh = min(searchHeight, image.height)
+        guard let region = image.cropped(x: 0, y: 0, width: sw, height: sh) else { return nil }
+
+        let runs = brightHorizontalRuns(in: region).filter {
+            $0.width >= 90 && $0.width <= 300 && $0.startX <= 45
+        }
+        var bestRect: CGRect?
+        var bestScore = -Double.infinity
+        var candidateCount = 0
+
+        for topIndex in runs.indices {
+            let top = runs[topIndex]
+            for bottomIndex in runs.indices.dropFirst(topIndex + 1) {
+                let bottom = runs[bottomIndex]
+                let height = bottom.y - top.y + 1
+                if height > 230 { break }
+                guard height >= 70, height <= 230 else { continue }
+
+                let left = max(0, min(top.startX, bottom.startX))
+                let right = min(region.width - 1, max(top.endX, bottom.endX))
+                let width = right - left + 1
+                guard width >= 90, width <= 300, left <= 35 else { continue }
+
+                let overlapLeft = max(top.startX, bottom.startX)
+                let overlapRight = min(top.endX, bottom.endX)
+                guard overlapRight - overlapLeft + 1 >= max(80, width / 2) else { continue }
+
+                let leftSide = brightVerticalSupport(in: region, x: left, y1: top.y, y2: bottom.y)
+                let rightSide = brightVerticalSupport(in: region, x: right, y1: top.y, y2: bottom.y)
+                let requiredSideSupport = max(18, height / 6)
+                guard leftSide >= requiredSideSupport || rightSide >= requiredSideSupport else { continue }
+
+                let frameDarkRatio = darkPixelRatio(
+                    in: region,
+                    minX: left,
+                    minY: top.y,
+                    maxX: right,
+                    maxY: bottom.y
+                )
+                guard frameDarkRatio >= 0.18 else { continue }
+                guard let contentRect = minimapContentRect(
+                    in: region,
+                    frameLeft: left,
+                    frameTop: top.y,
+                    frameRight: right,
+                    frameBottom: bottom.y
+                ) else { continue }
+
+                let contentLeft = Int(contentRect.minX)
+                let contentTop = Int(contentRect.minY)
+                let contentRight = Int(contentRect.maxX) - 1
+                let contentBottom = Int(contentRect.maxY) - 1
+                let markerCount = countMinimapMarkerPixels(
+                    in: region,
+                    minX: contentLeft,
+                    minY: contentTop,
+                    maxX: contentRight,
+                    maxY: contentBottom
+                )
+                candidateCount += 1
+
+                let contentArea = Int(contentRect.width * contentRect.height)
+                let score = Double(contentArea)
+                    + Double(markerCount * 120)
+                    + frameDarkRatio * 1_000
+                    - Double(top.y + left) * 2
+
+                if score > bestScore {
+                    bestScore = score
+                    bestRect = contentRect
+                }
+            }
+        }
+
+        guard let bestRect else { return nil }
+        return DarkRegionDetectionResult(
+            rect: bestRect,
+            threshold: nil,
+            candidateCount: candidateCount,
+            bestCandidate: bestRect,
+            bestRectangularity: bestScore
+        )
+    }
     
     static func autoDetectDarkRegion(
         in image: ImageBuffer,
         searchWidth: Int = 480,
         searchHeight: Int = 360,
         darkThreshold: Int = 100,
-        minArea: Int = 2_000
+        minArea: Int = 2_000,
+        maxCandidateWidth: Int = 240,
+        maxCandidateHeight: Int = 220
     ) -> CGRect? {
         detectDarkRegion(
             in: image,
             searchWidth: searchWidth,
             searchHeight: searchHeight,
             thresholds: [darkThreshold, 120, 140],
-            minArea: minArea
+            minArea: minArea,
+            maxCandidateWidth: maxCandidateWidth,
+            maxCandidateHeight: maxCandidateHeight
         ).rect
     }
     
@@ -428,7 +559,9 @@ enum ColorDetector {
         searchWidth: Int = 480,
         searchHeight: Int = 360,
         thresholds: [Int] = [100, 120, 140],
-        minArea: Int = 2_000
+        minArea: Int = 2_000,
+        maxCandidateWidth: Int = 240,
+        maxCandidateHeight: Int = 220
     ) -> DarkRegionDetectionResult {
         let sw = min(searchWidth, image.width)
         let sh = min(searchHeight, image.height)
@@ -450,7 +583,9 @@ enum ColorDetector {
             let attempt = detectDarkRegion(
                 in: region,
                 darkThreshold: threshold,
-                minArea: minArea
+                minArea: minArea,
+                maxCandidateWidth: maxCandidateWidth,
+                maxCandidateHeight: maxCandidateHeight
             )
             totalCandidateCount += attempt.candidateCount
             if attempt.bestRectangularity > overallBestRectangularity {
@@ -480,7 +615,9 @@ enum ColorDetector {
     private static func detectDarkRegion(
         in region: ImageBuffer,
         darkThreshold: Int,
-        minArea: Int
+        minArea: Int,
+        maxCandidateWidth: Int,
+        maxCandidateHeight: Int
     ) -> DarkRegionDetectionResult {
         
         var darkMask = [Bool](repeating: false, count: region.width * region.height)
@@ -568,6 +705,8 @@ enum ColorDetector {
                 guard rectArea >= minArea,
                       w >= 60,
                       h >= 40,
+                      w <= maxCandidateWidth,
+                      h <= maxCandidateHeight,
                       rectangularity > 0.55,
                       aspect > 0.5,
                       aspect < 4.0 else { continue }
@@ -590,6 +729,336 @@ enum ColorDetector {
             bestCandidate: bestRect ?? bestRejectedRect,
             bestRectangularity: bestRect == nil ? bestRejectedRectangularity : bestRectangularity
         )
+    }
+
+    private static func detectMinimapByDarkComponentsAndMarkers(
+        in image: ImageBuffer,
+        searchWidth: Int,
+        searchHeight: Int
+    ) -> DarkRegionDetectionResult? {
+        let sw = min(searchWidth, image.width)
+        let sh = min(searchHeight, image.height)
+        guard let region = image.cropped(x: 0, y: 0, width: sw, height: sh) else { return nil }
+
+        var bestRect: CGRect?
+        var bestScore = -Double.infinity
+        var bestMarkerCount = 0
+        var totalCandidateCount = 0
+
+        for threshold in [60, 80, 100, 120, 140] {
+            let components = rawDarkComponents(in: region, darkThreshold: threshold)
+            totalCandidateCount += components.count
+            for component in components {
+                let w = component.maxX - component.minX + 1
+                let h = component.maxY - component.minY + 1
+                let rectArea = w * h
+                guard rectArea >= 2_000,
+                      w >= 70,
+                      h >= 45,
+                      w <= 220,
+                      h <= 180 else { continue }
+
+                let aspect = Double(w) / Double(max(h, 1))
+                guard aspect >= 0.75 && aspect <= 2.6 else { continue }
+
+                let markerCount = countMinimapMarkerPixels(
+                    in: region,
+                    minX: component.minX,
+                    minY: component.minY,
+                    maxX: component.maxX,
+                    maxY: component.maxY
+                )
+                guard markerCount >= 3 else { continue }
+
+                let originPenalty = Double(component.minX + component.minY) * 1.5
+                let score = Double(markerCount * 200 + rectArea) - originPenalty
+                if score > bestScore {
+                    bestScore = score
+                    bestMarkerCount = markerCount
+                    bestRect = CGRect(x: component.minX, y: component.minY, width: w, height: h)
+                }
+            }
+        }
+
+        guard let bestRect else { return nil }
+        return DarkRegionDetectionResult(
+            rect: bestRect,
+            threshold: nil,
+            candidateCount: totalCandidateCount,
+            bestCandidate: bestRect,
+            bestRectangularity: Double(bestMarkerCount)
+        )
+    }
+
+    private struct DarkComponent {
+        let minX: Int
+        let minY: Int
+        let maxX: Int
+        let maxY: Int
+        let area: Int
+    }
+
+    private static func rawDarkComponents(
+        in region: ImageBuffer,
+        darkThreshold: Int
+    ) -> [DarkComponent] {
+        var darkMask = [Bool](repeating: false, count: region.width * region.height)
+        for y in 0..<region.height {
+            for x in 0..<region.width {
+                guard let pixel = region.pixelBGR(x: x, y: y) else { continue }
+                let gray = Int(
+                    0.114 * Double(pixel.b)
+                    + 0.587 * Double(pixel.g)
+                    + 0.299 * Double(pixel.r)
+                )
+                darkMask[y * region.width + x] = gray < darkThreshold
+            }
+        }
+
+        var components: [DarkComponent] = []
+        var visited = [Bool](repeating: false, count: region.width * region.height)
+        for y in 0..<region.height {
+            for x in 0..<region.width {
+                let idx = y * region.width + x
+                if visited[idx] { continue }
+                visited[idx] = true
+                guard darkMask[idx] else { continue }
+
+                var stack = [(x, y)]
+                var minX = x, maxX = x, minY = y, maxY = y
+                var area = 0
+                while let (cx, cy) = stack.popLast() {
+                    area += 1
+                    minX = min(minX, cx); maxX = max(maxX, cx)
+                    minY = min(minY, cy); maxY = max(maxY, cy)
+                    for (nx, ny) in neighbors(x: cx, y: cy, width: region.width, height: region.height) {
+                        let nIdx = ny * region.width + nx
+                        if visited[nIdx] { continue }
+                        visited[nIdx] = true
+                        if darkMask[nIdx] {
+                            stack.append((nx, ny))
+                        }
+                    }
+                }
+
+                if area >= 40 {
+                    components.append(DarkComponent(minX: minX, minY: minY, maxX: maxX, maxY: maxY, area: area))
+                }
+            }
+        }
+        return components
+    }
+
+    private static func brightHorizontalRuns(in image: ImageBuffer) -> [BrightRun] {
+        var runs: [BrightRun] = []
+        for y in 0..<image.height {
+            var start: Int?
+            var lastBright = -1
+            var gap = 0
+            for x in 0..<image.width {
+                let bright = isBrightFramePixelNear(image, x: x, y: y)
+                if bright {
+                    if start == nil { start = x }
+                    lastBright = x
+                    gap = 0
+                } else if start != nil {
+                    gap += 1
+                    if gap > 2 {
+                        if let start, lastBright - start + 1 >= 80 {
+                            runs.append(BrightRun(y: y, startX: start, endX: lastBright))
+                        }
+                        start = nil
+                        lastBright = -1
+                        gap = 0
+                    }
+                }
+            }
+            if let start, lastBright - start + 1 >= 80 {
+                runs.append(BrightRun(y: y, startX: start, endX: lastBright))
+            }
+        }
+        return runs
+    }
+
+    private static func brightVerticalSupport(in image: ImageBuffer, x: Int, y1: Int, y2: Int) -> Int {
+        guard y2 >= y1 else { return 0 }
+        var count = 0
+        for y in y1...y2 {
+            if isBrightFramePixelNear(image, x: x, y: y) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private static func minimapContentRect(
+        in image: ImageBuffer,
+        frameLeft: Int,
+        frameTop: Int,
+        frameRight: Int,
+        frameBottom: Int
+    ) -> CGRect? {
+        let innerLeft = max(0, frameLeft + 2)
+        let innerRight = min(image.width - 1, frameRight - 2)
+        let innerTop = max(0, frameTop + 2)
+        let innerBottom = min(image.height - 1, frameBottom - 2)
+        guard innerRight - innerLeft + 1 >= 70,
+              innerBottom - innerTop + 1 >= 45 else { return nil }
+
+        var segments: [(start: Int, end: Int)] = []
+        var start: Int?
+        var lastDark = -1
+        var gap = 0
+
+        for y in innerTop...innerBottom {
+            let ratio = darkPixelRatio(
+                in: image,
+                minX: innerLeft,
+                minY: y,
+                maxX: innerRight,
+                maxY: y
+            )
+            if ratio >= 0.12 {
+                if start == nil { start = y }
+                lastDark = y
+                gap = 0
+            } else if start != nil {
+                gap += 1
+                if gap > 2 {
+                    if let start, lastDark - start + 1 >= 30 {
+                        segments.append((start, lastDark))
+                    }
+                    start = nil
+                    lastDark = -1
+                    gap = 0
+                }
+            }
+        }
+        if let start, lastDark - start + 1 >= 30 {
+            segments.append((start, lastDark))
+        }
+
+        var bestRect: CGRect?
+        var bestScore = -Double.infinity
+
+        for segment in segments {
+            var minX: Int?
+            var maxX: Int?
+            for x in innerLeft...innerRight {
+                let ratio = darkPixelRatio(
+                    in: image,
+                    minX: x,
+                    minY: segment.start,
+                    maxX: x,
+                    maxY: segment.end
+                )
+                if ratio >= 0.08 {
+                    minX = min(minX ?? x, x)
+                    maxX = max(maxX ?? x, x)
+                }
+            }
+            guard let minX, let maxX else { continue }
+
+            let width = maxX - minX + 1
+            let height = segment.end - segment.start + 1
+            guard width >= 70, height >= 40 else { continue }
+
+            let markerCount = countMinimapMarkerPixels(
+                in: image,
+                minX: minX,
+                minY: segment.start,
+                maxX: maxX,
+                maxY: segment.end
+            )
+            let ratio = darkPixelRatio(
+                in: image,
+                minX: minX,
+                minY: segment.start,
+                maxX: maxX,
+                maxY: segment.end
+            )
+            let score = Double(width * height)
+                + Double(markerCount * 120)
+                + ratio * 1_000
+                + Double(segment.start - frameTop) * 4
+            if score > bestScore {
+                bestScore = score
+                bestRect = CGRect(x: minX, y: segment.start, width: width, height: height)
+            }
+        }
+
+        return bestRect
+    }
+
+    private static func isBrightFramePixelNear(_ image: ImageBuffer, x: Int, y: Int) -> Bool {
+        for dy in -1...1 {
+            for dx in -1...1 {
+                let nx = x + dx
+                let ny = y + dy
+                guard let pixel = image.pixelBGR(x: nx, y: ny) else { continue }
+                if isBrightFramePixel(pixel) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func isBrightFramePixel(_ pixel: (b: UInt8, g: UInt8, r: UInt8)) -> Bool {
+        let maxChannel = max(Int(pixel.r), Int(pixel.g), Int(pixel.b))
+        let minChannel = min(Int(pixel.r), Int(pixel.g), Int(pixel.b))
+        let brightness = (Int(pixel.r) + Int(pixel.g) + Int(pixel.b)) / 3
+        return brightness >= 170 && minChannel >= 145 && maxChannel - minChannel <= 90
+    }
+
+    private static func darkPixelRatio(
+        in image: ImageBuffer,
+        minX: Int,
+        minY: Int,
+        maxX: Int,
+        maxY: Int
+    ) -> Double {
+        var dark = 0
+        var total = 0
+        for y in minY...maxY {
+            for x in minX...maxX {
+                guard let pixel = image.pixelBGR(x: x, y: y) else { continue }
+                let gray = Int(
+                    0.114 * Double(pixel.b)
+                    + 0.587 * Double(pixel.g)
+                    + 0.299 * Double(pixel.r)
+                )
+                if gray < 120 {
+                    dark += 1
+                }
+                total += 1
+            }
+        }
+        guard total > 0 else { return 0 }
+        return Double(dark) / Double(total)
+    }
+
+    private static func countMinimapMarkerPixels(
+        in image: ImageBuffer,
+        minX: Int,
+        minY: Int,
+        maxX: Int,
+        maxY: Int
+    ) -> Int {
+        var count = 0
+        for y in minY...maxY {
+            for x in minX...maxX {
+                guard let pixel = image.pixelBGR(x: x, y: y) else { continue }
+                let hsv = rgbToOpenCVHSV(r: pixel.r, g: pixel.g, b: pixel.b)
+                let isYellow = hsv.h >= 18 && hsv.h <= 45 && hsv.s >= 100 && hsv.v >= 130
+                let isBlue = hsv.h >= 80 && hsv.h <= 135 && hsv.s >= 80 && hsv.v >= 90
+                let isRed = (hsv.h <= 12 || hsv.h >= 170) && hsv.s >= 100 && hsv.v >= 120
+                if isYellow || isBlue || isRed {
+                    count += 1
+                }
+            }
+        }
+        return count
     }
     
     private static func exteriorContourArea(

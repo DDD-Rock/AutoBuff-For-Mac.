@@ -6,30 +6,38 @@ struct PortalMarkerView: View {
     let windowID: CGWindowID
     let existingX: Int?
     let existingY: Int?
-    let onConfirm: (Int?, Int?) -> Void
+    var title = "标记传送门位置"
+    var showAutoPortal = true
+    var clearButtonTitle = "清除手动标记"
+    var loadedStatusText = "蓝点=自动检测，红点=手动标记，点击图像设置手动位置"
+    let onConfirm: (Int?, Int?, CGRect?) -> Void
     
     @Environment(\.dismiss) private var dismiss
     @State private var minimapImage: NSImage?
     @State private var autoPortal: CGPoint?
     @State private var manualPoint: CGPoint?
     @State private var regionSize: CGSize = .zero
+    @State private var detectedRegion: CGRect?
     @State private var statusText = "加载中..."
+    @State private var isLoading = true
     
     var body: some View {
         VStack(spacing: 12) {
-            Text("标记传送门位置")
+            Text(title)
                 .font(.title2)
             Text(statusText)
                 .font(.caption)
                 .foregroundStyle(AppTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
             if let image = minimapImage {
                 Image(nsImage: image)
+                    .resizable()
                     .interpolation(.none)
-                    .scaleEffect(2)
-                    .frame(width: regionSize.width * 2, height: regionSize.height * 2)
+                    .frame(width: previewSize.width, height: previewSize.height)
                     .overlay {
                         Canvas { context, size in
-                            if let auto = autoPortal {
+                            if showAutoPortal, let auto = autoPortal {
                                 let p = scaled(auto, in: size)
                                 context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.blue))
                             }
@@ -39,21 +47,47 @@ struct PortalMarkerView: View {
                             }
                         }
                     }
+                    .contentShape(Rectangle())
                     .onTapGesture { location in
-                        manualPoint = CGPoint(x: location.x / 2, y: location.y / 2)
+                        guard previewScale > 0 else { return }
+                        manualPoint = CGPoint(x: location.x / previewScale, y: location.y / previewScale)
                     }
-            } else {
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(AppTheme.border)
+                    }
+            } else if isLoading {
                 ProgressView()
-                    .frame(height: 200)
+                    .frame(width: 420, height: 240)
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "map")
+                        .font(.system(size: 28))
+                        .foregroundStyle(AppTheme.textSecondary)
+                    Text("未能加载小地图")
+                        .font(.headline)
+                    Text("请确认已选择游戏窗口，并且小地图在窗口左上区域可见。")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(width: 420, height: 240)
+                .background(AppTheme.panel)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(AppTheme.border)
+                }
             }
             HStack {
-                Button("清除手动标记") { manualPoint = nil }
+                Button(clearButtonTitle) { manualPoint = nil }
                 Spacer()
                 Button("确认") {
                     if let manual = manualPoint {
-                        onConfirm(Int(manual.x), Int(manual.y))
+                        onConfirm(Int(manual.x), Int(manual.y), detectedRegion)
                     } else {
-                        onConfirm(nil, nil)
+                        onConfirm(nil, nil, nil)
                     }
                     dismiss()
                 }
@@ -64,6 +98,20 @@ struct PortalMarkerView: View {
         .frame(width: 480, height: 520)
         .task { await loadMinimap() }
     }
+
+    private var previewScale: CGFloat {
+        guard regionSize.width > 0, regionSize.height > 0 else { return 1 }
+        let maxPreview = CGSize(width: 420, height: 300)
+        return min(
+            2,
+            maxPreview.width / regionSize.width,
+            maxPreview.height / regionSize.height
+        )
+    }
+
+    private var previewSize: CGSize {
+        CGSize(width: regionSize.width * previewScale, height: regionSize.height * previewScale)
+    }
     
     private func scaled(_ point: CGPoint, in size: CGSize) -> CGPoint {
         guard regionSize.width > 0, regionSize.height > 0 else { return point }
@@ -71,18 +119,29 @@ struct PortalMarkerView: View {
     }
     
     private func loadMinimap() async {
+        isLoading = true
+        defer { isLoading = false }
         let monitor = MinimapMonitor()
         monitor.setWindow(windowID)
         do {
-            _ = try await monitor.autoDetectDarkRegion()
+            guard let region = try await monitor.autoDetectDarkRegion() else {
+                statusText = "未识别到小地图：\(monitor.lastDetectionSummary)"
+                minimapImage = nil
+                regionSize = .zero
+                detectedRegion = nil
+                return
+            }
+            detectedRegion = region
             let buffer = try await monitor.captureMinimap()
             regionSize = CGSize(width: buffer.width, height: buffer.height)
             minimapImage = buffer.toPreviewImage()
-            autoPortal = try await monitor.findBluePortal(leftmost: true)
+            if showAutoPortal {
+                autoPortal = try await monitor.findBluePortal(leftmost: true)
+            }
             if let existingX, let existingY {
                 manualPoint = CGPoint(x: existingX, y: existingY)
             }
-            statusText = "蓝点=自动检测，红点=手动标记，点击图像设置手动位置"
+            statusText = loadedStatusText
         } catch {
             statusText = "加载失败: \(error.localizedDescription)"
         }

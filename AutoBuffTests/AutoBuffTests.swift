@@ -37,6 +37,54 @@ struct SettingsManagerTests {
         #expect(loaded.randomBehaviorValue == 15)
     }
 
+    @Test func legacyReturnToMarketMigratesToModeWhenModeMissing() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let json = """
+        {
+          "returnToMarket": false,
+          "buffs": [
+            { "id": 1, "enabled": true, "key": "1", "duration": 200 },
+            { "id": 2, "enabled": true, "key": "2", "duration": 200 },
+            { "id": 3, "enabled": false, "key": "", "duration": 0 }
+          ]
+        }
+        """
+        try json.data(using: .utf8)?.write(to: tempDir.appendingPathComponent(AppConstants.settingsFileName))
+
+        let manager = SettingsManager(settingsDirectory: tempDir)
+        let loaded = manager.load()
+
+        #expect(loaded.mode == .liveFlower)
+        #expect(loaded.returnToMarket == false)
+    }
+
+    @Test func followHealModeAndHealKeyPersist() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        var settings = AppSettings.default
+        settings.mode = .followHeal
+        settings.healSkillKey = "Q"
+        settings.healAnchorX = 77
+        settings.healAnchorY = 12
+        settings.healMinimapRegion = CGRect(x: 8, y: 120, width: 164, height: 86)
+        settings.followHealAdjustMinMS = 220
+        settings.followHealAdjustMaxMS = 330
+
+        let manager = SettingsManager(settingsDirectory: tempDir)
+        manager.save(settings)
+        let loaded = manager.load()
+
+        #expect(loaded.mode == .followHeal)
+        #expect(loaded.returnToMarket == false)
+        #expect(loaded.healSkillKey == "Q")
+        #expect(loaded.healAnchorX == 77)
+        #expect(loaded.healAnchorY == 12)
+        #expect(loaded.healMinimapRegion == CGRect(x: 8, y: 120, width: 164, height: 86))
+        #expect(loaded.followHealAdjustMinMS == 220)
+        #expect(loaded.followHealAdjustMaxMS == 330)
+    }
+
     @Test func legacyEmptyBuffSlotsCollapseToThree() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -132,6 +180,33 @@ struct SettingsManagerTests {
     @Test func portalArrivalUsesPointResolutionTolerance() {
         #expect(PortalNavigation.hasArrived(playerX: 30, portalX: 32.5))
         #expect(!PortalNavigation.hasArrived(playerX: 30, portalX: 35))
+    }
+
+    @Test func followHealNavigationChoosesDirectionToBase() {
+        #expect(FollowHealNavigation.directionToBase(currentX: 104, baseX: 100) == .left)
+        #expect(FollowHealNavigation.directionToBase(currentX: 96, baseX: 100) == .right)
+        #expect(FollowHealNavigation.directionToBase(currentX: 102.5, baseX: 100) == nil)
+    }
+
+    @Test func followHealCenterAdjustmentMovesTowardBaseOrRightWhenCentered() {
+        #expect(FollowHealNavigation.directionForCenterAdjustment(currentX: 104, baseX: 100) == .left)
+        #expect(FollowHealNavigation.directionForCenterAdjustment(currentX: 96, baseX: 100) == .right)
+        #expect(FollowHealNavigation.directionForCenterAdjustment(currentX: 102.5, baseX: 100) == .right)
+    }
+
+    @Test func followHealAnchorBandAllowsSmallSideSteps() {
+        #expect(!FollowHealNavigation.isOutsideAnchorBand(currentX: 106, baseX: 100))
+        #expect(!FollowHealNavigation.isOutsideAnchorBand(currentX: 94, baseX: 100))
+        #expect(FollowHealNavigation.isOutsideAnchorBand(currentX: 106.5, baseX: 100))
+        #expect(FollowHealNavigation.isOutsideAnchorBand(currentX: 93.5, baseX: 100))
+    }
+
+    @Test func followHealCenterAdjustIntervalIsFrequent() {
+        for _ in 0..<20 {
+            let interval = FollowHealNavigation.nextCenterAdjustInterval()
+            #expect(interval >= 12)
+            #expect(interval <= 15)
+        }
     }
 
     @Test func keyCodeMapUsesRealMacKeyPositions() {
@@ -281,6 +356,147 @@ struct SettingsManagerTests {
         )
         #expect(result.rect == CGRect(x: 25, y: 20, width: 110, height: 60))
         #expect(result.bestRectangularity > 0.9)
+    }
+
+    @Test func darkRegionDetectionRejectsOversizedGameBackground() {
+        let width = 420
+        let height = 260
+        var data = [UInt8](repeating: 230, count: width * height * 3)
+        func setGray(x: Int, y: Int, value: UInt8) {
+            let index = (y * width + x) * 3
+            data[index] = value
+            data[index + 1] = value
+            data[index + 2] = value
+        }
+
+        for y in 20..<250 {
+            for x in 190..<410 {
+                setGray(x: x, y: y, value: 35)
+            }
+        }
+        for y in 70..<150 {
+            for x in 35..<165 {
+                setGray(x: x, y: y, value: 20)
+            }
+        }
+
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+        let result = ColorDetector.detectDarkRegion(
+            in: image,
+            searchWidth: width,
+            searchHeight: height,
+            thresholds: [100],
+            minArea: 2_000,
+            maxCandidateWidth: 180,
+            maxCandidateHeight: 120
+        )
+        #expect(result.rect == CGRect(x: 35, y: 70, width: 130, height: 80))
+    }
+
+    @Test func minimapRegionDetectionPrefersMarkedDarkMapOverBackground() {
+        let width = 320
+        let height = 240
+        var data = [UInt8](repeating: 230, count: width * height * 3)
+        func setBGR(x: Int, y: Int, b: UInt8, g: UInt8, r: UInt8) {
+            let index = (y * width + x) * 3
+            data[index] = b
+            data[index + 1] = g
+            data[index + 2] = r
+        }
+        func setGray(x: Int, y: Int, value: UInt8) {
+            setBGR(x: x, y: y, b: value, g: value, r: value)
+        }
+
+        for y in 20..<230 {
+            for x in 180..<315 {
+                setGray(x: x, y: y, value: 35)
+            }
+        }
+        for y in 95..<185 {
+            for x in 40..<170 {
+                setGray(x: x, y: y, value: 25)
+            }
+        }
+        for y in 130..<134 {
+            for x in 88..<92 {
+                setBGR(x: x, y: y, b: 0, g: 235, r: 255)
+            }
+        }
+        for y in 150..<154 {
+            for x in 120..<124 {
+                setBGR(x: x, y: y, b: 255, g: 80, r: 20)
+            }
+        }
+
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+        let result = ColorDetector.detectMinimapRegion(in: image, searchWidth: width, searchHeight: height)
+        #expect(result.rect == CGRect(x: 40, y: 95, width: 130, height: 90))
+    }
+
+    @Test func minimapRegionDetectionPrefersWhiteFrame() {
+        let width = 360
+        let height = 280
+        var data = [UInt8](repeating: 230, count: width * height * 3)
+        func setBGR(x: Int, y: Int, b: UInt8, g: UInt8, r: UInt8) {
+            let index = (y * width + x) * 3
+            data[index] = b
+            data[index + 1] = g
+            data[index + 2] = r
+        }
+        func setGray(x: Int, y: Int, value: UInt8) {
+            setBGR(x: x, y: y, b: value, g: value, r: value)
+        }
+
+        for y in 20..<260 {
+            for x in 205..<350 {
+                setGray(x: x, y: y, value: 35)
+            }
+        }
+
+        let left = 8
+        let top = 78
+        let frameWidth = 176
+        let frameHeight = 142
+        let right = left + frameWidth - 1
+        let bottom = top + frameHeight - 1
+
+        let contentLeft = left + 6
+        let contentTop = top + 72
+        let contentWidth = frameWidth - 12
+        let contentHeight = frameHeight - 84
+        for y in contentTop..<(contentTop + contentHeight) {
+            for x in contentLeft..<(contentLeft + contentWidth) {
+                setGray(x: x, y: y, value: 28)
+            }
+        }
+        for x in left...right {
+            setGray(x: x, y: top, value: 245)
+            setGray(x: x, y: bottom, value: 245)
+        }
+        for y in top...bottom {
+            setGray(x: left, y: y, value: 245)
+            setGray(x: right, y: y, value: 245)
+        }
+        for y in (contentTop + 16)..<(contentTop + 20) {
+            for x in (contentLeft + 45)..<(contentLeft + 49) {
+                setBGR(x: x, y: y, b: 0, g: 235, r: 255)
+            }
+        }
+        for y in (contentTop + 34)..<(contentTop + 38) {
+            for x in (contentLeft + 86)..<(contentLeft + 90) {
+                setBGR(x: x, y: y, b: 255, g: 80, r: 20)
+            }
+        }
+
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+        let result = ColorDetector.detectMinimapRegion(in: image, searchWidth: width, searchHeight: height)
+        #expect(result.rect != nil)
+        if let rect = result.rect {
+            #expect(abs(Int(rect.minX) - contentLeft) <= 2)
+            #expect(abs(Int(rect.minY) - contentTop) <= 2)
+            #expect(abs(Int(rect.width) - contentWidth) <= 4)
+            #expect(abs(Int(rect.height) - contentHeight) <= 4)
+        }
     }
 
     @Test func runtimeTemplatesArePackagedAndReadable() {

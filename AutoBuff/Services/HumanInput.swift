@@ -68,6 +68,25 @@ actor HumanInput {
     }
 
     @discardableResult
+    func tapNamedKey(_ key: String, holdMS: ClosedRange<Int>) throws -> TimeInterval {
+        let name = KeyCodeMap.resolveKeyName(key)
+        guard let keyCode = KeyCodeMap.virtualKeyCode(for: name) else {
+            throw KeyboardUtils.InputError.unsupportedKey(key)
+        }
+        let duration = randomDuration(holdMS)
+        KeyboardUtils.postKey(keyCode, keyDown: true)
+        let pressedAt = Date().timeIntervalSince1970
+        Thread.sleep(forTimeInterval: duration)
+        KeyboardUtils.postKey(keyCode, keyDown: false)
+        return pressedAt
+    }
+
+    @discardableResult
+    func holdNamedKey(_ key: String) throws -> CGKeyCode {
+        try pressNamedKeyDown(key)
+    }
+
+    @discardableResult
     func pressNamedKeyDown(_ key: String) throws -> CGKeyCode {
         let name = KeyCodeMap.resolveKeyName(key)
         guard let keyCode = KeyCodeMap.virtualKeyCode(for: name) else {

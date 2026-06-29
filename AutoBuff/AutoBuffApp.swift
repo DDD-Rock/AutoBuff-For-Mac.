@@ -53,7 +53,9 @@ struct AutoBuffApp: App {
     var body: some Scene {
         WindowGroup("YzY - Auto Buff") {
             if #available(macOS 14.0, *) {
-                ContentView()
+                ActivationGateView {
+                    ContentView()
+                }
             } else {
                 Text("AutoBuff 需要 macOS 14.0 或更高版本")
                     .padding()
