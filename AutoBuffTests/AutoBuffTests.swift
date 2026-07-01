@@ -290,6 +290,30 @@ struct SettingsManagerTests {
         #expect(result.selectedArea == 12)
     }
 
+    @Test func playerDetectionRejectsThinYellowUiGlyphs() {
+        let width = 40
+        let height = 20
+        var data = [UInt8](repeating: 20, count: width * height * 3)
+        func paint(x: Int, y: Int, width: Int, height: Int, b: UInt8, g: UInt8, r: UInt8) {
+            for row in y..<(y + height) {
+                for column in x..<(x + width) {
+                    let index = (row * 40 + column) * 3
+                    data[index] = b
+                    data[index + 1] = g
+                    data[index + 2] = r
+                }
+            }
+        }
+
+        paint(x: 4, y: 7, width: 4, height: 4, b: 0, g: 255, r: 255)
+        paint(x: 26, y: 3, width: 2, height: 12, b: 0, g: 255, r: 255)
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+
+        let result = ColorDetector.detectPlayerMarker(in: image)
+        #expect(result.point == CGPoint(x: 5.5, y: 8.5))
+        #expect(result.selectedArea == 16)
+    }
+
     @Test func darkRegionDetectionClosesSmallHolesAndRejectsNoise() {
         let width = 120
         let height = 90

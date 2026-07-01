@@ -414,7 +414,7 @@ final class DeadFlowerWorker: ObservableObject {
             if stuckCount >= 5 {
                 await human.stopMove()
                 currentDirection = nil
-                log("检测到移动停滞（游戏焦点正常），重新按方向键")
+                log("检测到移动停滞（游戏焦点正常），重新按方向键：\(minimap.lastPlayerDetectionSummary)")
                 await randomSleep(0.1...0.3)
                 stuckCount = 0
             }

@@ -321,10 +321,17 @@ enum ColorDetector {
         let point: CGPoint?
         let candidateCount: Int
         let selectedArea: Int?
+        let selectedSize: CGSize?
         
         var summary: String {
             if let point {
-                return "玩家黄点 x=\(String(format: "%.1f", point.x)), y=\(String(format: "%.1f", point.y))，面积=\(selectedArea ?? 0)，候选数=\(candidateCount)"
+                let sizeText: String
+                if let selectedSize {
+                    sizeText = "，尺寸=\(Int(selectedSize.width))×\(Int(selectedSize.height))"
+                } else {
+                    sizeText = ""
+                }
+                return "玩家黄点 x=\(String(format: "%.1f", point.x)), y=\(String(format: "%.1f", point.y))，面积=\(selectedArea ?? 0)\(sizeText)，候选数=\(candidateCount)"
             }
             return "未检测到玩家黄点，候选数=\(candidateCount)"
         }
@@ -358,7 +365,7 @@ enum ColorDetector {
     static func detectPlayerMarker(
         in image: ImageBuffer,
         minArea: Int = 2,
-        maxArea: Int = 180
+        maxArea: Int = 120
     ) -> PlayerMarkerDetectionResult {
         let blobs = connectedColorBlobs(in: image) { b, g, r in
             // Native Retina pixels matched the strict Windows BGR threshold.
@@ -376,21 +383,30 @@ enum ColorDetector {
         let candidates = blobs.filter {
             guard $0.area >= minArea,
                   $0.area <= maxArea,
-                  $0.width <= 20,
-                  $0.height <= 20,
+                  $0.width >= 2,
+                  $0.height >= 2,
+                  $0.width <= 16,
+                  $0.height <= 16,
                   $0.width > 0,
                   $0.height > 0 else { return false }
             let aspect = Double($0.width) / Double($0.height)
-            return aspect >= 0.35 && aspect <= 2.8
+            let fillRatio = Double($0.area) / Double($0.width * $0.height)
+            return aspect >= 0.55
+                && aspect <= 1.9
+                && fillRatio >= 0.45
         }
         
-        // Match the Windows/OpenCV behavior: use the largest valid yellow
-        // contour. The size bounds above keep unrelated large UI elements out.
-        let best = candidates.max { $0.area < $1.area }
+        // Prefer the compact player marker over thin yellow UI glyphs or
+        // oversized minimap decorations that can otherwise stay fixed while the
+        // character is moving.
+        let best = candidates.max { lhs, rhs in
+            playerMarkerScore(lhs) < playerMarkerScore(rhs)
+        }
         return PlayerMarkerDetectionResult(
             point: best?.centroid,
             candidateCount: candidates.count,
-            selectedArea: best?.area
+            selectedArea: best?.area,
+            selectedSize: best.map { CGSize(width: $0.width, height: $0.height) }
         )
     }
     
@@ -1151,6 +1167,14 @@ enum ColorDetector {
         let area: Int
         let width: Int
         let height: Int
+    }
+
+    private static func playerMarkerScore(_ blob: ColorBlob) -> Double {
+        let aspect = Double(blob.width) / Double(blob.height)
+        let fillRatio = Double(blob.area) / Double(blob.width * blob.height)
+        let squarePenalty = abs(log(aspect))
+        let sizePenalty = abs(Double(blob.area) - 24) / 24
+        return fillRatio * 8 + Double(blob.area) / 20 - squarePenalty * 3 - sizePenalty
     }
     
     private static func connectedColorBlobs(
