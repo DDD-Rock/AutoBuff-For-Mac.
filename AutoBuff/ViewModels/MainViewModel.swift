@@ -26,12 +26,14 @@ final class MainViewModel: ObservableObject {
     @Published var debugExpanded = false
     @Published var previewImage: NSImage?
     @Published var previewInfo = ""
+    @Published var isPartyInviteWorkerActive = false
 
     private let settingsManager = SettingsManager()
     private let windowSelector = WindowSelector()
     private let liveWorker = LiveFlowerWorker()
     private let deadWorker = DeadFlowerWorker()
     private let followHealWorker = FollowHealWorker()
+    private let partyInviteWorker = PartyInviteWorker()
 
     enum KeyboardTarget: Equatable {
         case buff(Int)
@@ -54,12 +56,14 @@ final class MainViewModel: ObservableObject {
             appendLog("⚠️ 当前使用临时代码签名；重新构建后辅助功能授权可能失效")
         }
         autoIdentifyWindow()
+        syncPartyInviteWorker(logMissingRequirements: false)
     }
 
     func refreshPermissions() {
         accessibilityGranted = PermissionManager.requestAccessibility(prompt: false)
         accessibilityUsesAdHocSignature = PermissionManager.isAdHocSigned
         screenRecordingGranted = PermissionManager.screenRecordingGranted
+        syncPartyInviteWorker(logMissingRequirements: false)
     }
 
     func requestAccessibility() {
@@ -120,6 +124,19 @@ final class MainViewModel: ObservableObject {
     func selectWindow(_ window: GameWindowInfo) {
         selectedWindow = window
         windowStatusText = "\(window.title) (\(Int(window.size.width))×\(Int(window.size.height)))"
+        syncPartyInviteWorker(logMissingRequirements: false)
+    }
+
+    func setAutoAcceptPartyInviteEnabled(_ enabled: Bool) {
+        settings.autoAcceptPartyInviteEnabled = enabled
+        saveSettings()
+        if enabled {
+            syncPartyInviteWorker(logMissingRequirements: true)
+        } else {
+            partyInviteWorker.stop()
+            isPartyInviteWorkerActive = false
+            appendLog("自动接队已关闭")
+        }
     }
 
     func toggleWorker() {
@@ -308,6 +325,7 @@ final class MainViewModel: ObservableObject {
     }
 
     func shutdown() {
+        partyInviteWorker.stop()
         stopWorker()
         saveSettings()
     }
@@ -335,6 +353,59 @@ final class MainViewModel: ObservableObject {
         followHealWorker.onStopped = { [weak self] in
             self?.isRunning = false
             self?.countdowns = [:]
+        }
+
+        partyInviteWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
+        partyInviteWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
+        partyInviteWorker.onStateChanged = { [weak self] active in
+            self?.isPartyInviteWorkerActive = active
+        }
+    }
+
+    private func syncPartyInviteWorker(logMissingRequirements: Bool) {
+        guard settings.autoAcceptPartyInviteEnabled else {
+            partyInviteWorker.stop()
+            isPartyInviteWorkerActive = false
+            return
+        }
+        guard let window = selectedWindow else {
+            partyInviteWorker.stop()
+            isPartyInviteWorkerActive = false
+            if logMissingRequirements { appendLog("请先识别游戏窗口后再开启自动接队") }
+            return
+        }
+        guard windowSelector.isWindowValid(windowID: window.windowID) else {
+            selectedWindow = nil
+            windowStatusText = "未识别"
+            partyInviteWorker.stop()
+            isPartyInviteWorkerActive = false
+            if logMissingRequirements { appendLog("游戏窗口已失效，请重新识别") }
+            return
+        }
+        guard accessibilityGranted else {
+            partyInviteWorker.stop()
+            isPartyInviteWorkerActive = false
+            if logMissingRequirements {
+                appendLog("自动接队需要辅助功能权限")
+                requestAccessibility()
+            }
+            return
+        }
+        guard screenRecordingGranted else {
+            partyInviteWorker.stop()
+            isPartyInviteWorkerActive = false
+            if logMissingRequirements {
+                appendLog("自动接队需要屏幕录制权限")
+                requestScreenRecording()
+            }
+            return
+        }
+
+        let wasRunning = partyInviteWorker.isRunning
+        let previousWindowID = partyInviteWorker.currentWindowID
+        partyInviteWorker.start(windowID: window.windowID)
+        if !wasRunning || previousWindowID != window.windowID {
+            appendLog("自动接队已开启")
         }
     }
 

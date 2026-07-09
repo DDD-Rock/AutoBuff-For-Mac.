@@ -78,4 +78,25 @@ enum DebugTools {
         }
         log("⚠️ 已点击确定，但弹窗仍被检测到")
     }
+
+    static func testPartyInvite(windowID: CGWindowID?, log: @MainActor @escaping (String) -> Void) async {
+        guard let windowID else { log("请先识别游戏窗口"); return }
+        log("调试: 测试队伍邀请检测...")
+        let detector = PartyInviteDetector()
+        detector.setWindow(windowID)
+        guard let pos = try? await detector.findAcceptButtonScreenPoint() else {
+            log("未检测到队伍邀请")
+            return
+        }
+
+        log("队伍邀请同意按钮: \(Int(pos.x)), \(Int(pos.y))，正在点击...")
+        let windowSelector = WindowSelector()
+        let human = HumanInput()
+        if !windowSelector.bringWindowToFront(windowID: windowID) {
+            log("⚠️ 无法将游戏窗口置于前台，仍会尝试点击")
+        }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        await human.clickAt(screenPoint: pos, offsetRange: 2)
+        log("已点击队伍邀请同意按钮")
+    }
 }

@@ -527,6 +527,8 @@ struct SettingsManagerTests {
         #expect(TemplatePaths.load(TemplatePaths.marketButton) != nil)
         #expect(TemplatePaths.load(TemplatePaths.marketLogo) != nil)
         #expect(TemplatePaths.load(TemplatePaths.confirmButton) != nil)
+        #expect(TemplatePaths.load(TemplatePaths.partyAcceptButton) != nil)
+        #expect(TemplatePaths.load(TemplatePaths.partyDeclineButton) != nil)
     }
 
     @Test func acceleratedTemplateMatcherFindsExactLocation() {

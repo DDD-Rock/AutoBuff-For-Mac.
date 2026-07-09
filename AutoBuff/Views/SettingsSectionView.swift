@@ -56,6 +56,10 @@ struct SettingsSectionView: View {
 
             Divider().overlay(AppTheme.border)
 
+            partyInviteOption
+
+            Divider().overlay(AppTheme.border)
+
             if viewModel.mode == .liveFlower {
                 liveOptions
             } else if viewModel.mode == .deadFlower {
@@ -69,6 +73,30 @@ struct SettingsSectionView: View {
             focusedDurationID = nil
         }
         .onChange(of: viewModel.settings) { _, _ in viewModel.saveSettings() }
+    }
+
+    private var partyInviteOption: some View {
+        HStack(spacing: 10) {
+            Label("自动接队", systemImage: "person.2.badge.gearshape")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppTheme.textPrimary)
+            Spacer(minLength: 0)
+            Text(viewModel.isPartyInviteWorkerActive ? "运行中" : "待机")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(viewModel.isPartyInviteWorkerActive ? AppTheme.success : AppTheme.textSecondary)
+                .frame(width: 42, alignment: .trailing)
+            Toggle(
+                "",
+                isOn: Binding(
+                    get: { viewModel.settings.autoAcceptPartyInviteEnabled },
+                    set: { viewModel.setAutoAcceptPartyInviteEnabled($0) }
+                )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+        }
+        .frame(minHeight: 24)
     }
 
     private var liveOptions: some View {

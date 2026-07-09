@@ -60,6 +60,7 @@ struct AppSettings: Codable, Equatable {
     var randomBehaviorValue: Int = 20
     var followHealAdjustMinMS: Int = 200
     var followHealAdjustMaxMS: Int = 300
+    var autoAcceptPartyInviteEnabled: Bool = false
     var movementMode: MovementMode = .none
     var preSkillMoveMode: PreSkillMoveMode = .rightOnly
     var manualPortalX: Int? = nil
@@ -92,6 +93,7 @@ extension AppSettings {
         case randomBehaviorValue
         case followHealAdjustMinMS
         case followHealAdjustMaxMS
+        case autoAcceptPartyInviteEnabled
         case movementMode
         case preSkillMoveMode
         case manualPortalX
@@ -119,6 +121,7 @@ extension AppSettings {
         self.randomBehaviorValue = try container.decodeIfPresent(Int.self, forKey: .randomBehaviorValue) ?? 20
         self.followHealAdjustMinMS = try container.decodeIfPresent(Int.self, forKey: .followHealAdjustMinMS) ?? 200
         self.followHealAdjustMaxMS = try container.decodeIfPresent(Int.self, forKey: .followHealAdjustMaxMS) ?? 300
+        self.autoAcceptPartyInviteEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoAcceptPartyInviteEnabled) ?? false
         self.movementMode = try container.decodeIfPresent(MovementMode.self, forKey: .movementMode) ?? .none
         self.preSkillMoveMode = try container.decodeIfPresent(PreSkillMoveMode.self, forKey: .preSkillMoveMode) ?? .rightOnly
         self.manualPortalX = try container.decodeIfPresent(Int.self, forKey: .manualPortalX)
@@ -144,6 +147,7 @@ extension AppSettings {
         try container.encode(randomBehaviorValue, forKey: .randomBehaviorValue)
         try container.encode(followHealAdjustMinMS, forKey: .followHealAdjustMinMS)
         try container.encode(followHealAdjustMaxMS, forKey: .followHealAdjustMaxMS)
+        try container.encode(autoAcceptPartyInviteEnabled, forKey: .autoAcceptPartyInviteEnabled)
         try container.encode(movementMode, forKey: .movementMode)
         try container.encode(preSkillMoveMode, forKey: .preSkillMoveMode)
         try container.encodeIfPresent(manualPortalX, forKey: .manualPortalX)

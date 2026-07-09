@@ -14,18 +14,24 @@ struct DebugPanelView: View {
                     Button("截图预览") {
                         Task { await viewModel.capturePreview() }
                     }
+                    .disabled(viewModel.isRunning)
                     Button("检测市场/传送门") {
                         Task { await DebugTools.testLeaveMarket(windowID: viewModel.selectedWindow?.windowID, log: viewModel.appendLog) }
                     }
+                    .disabled(viewModel.isRunning)
                     Button("检测市场按钮") {
                         Task { await DebugTools.testReturnToMarket(windowID: viewModel.selectedWindow?.windowID, log: viewModel.appendLog) }
                     }
+                    .disabled(viewModel.isRunning)
                     Button("关闭弹窗") {
                         Task { await DebugTools.testDismissDialog(windowID: viewModel.selectedWindow?.windowID, log: viewModel.appendLog) }
                     }
+                    .disabled(viewModel.isRunning)
+                    Button("测试自动接队") {
+                        Task { await DebugTools.testPartyInvite(windowID: viewModel.selectedWindow?.windowID, log: viewModel.appendLog) }
+                    }
                 }
                 .controlSize(.small)
-                .disabled(viewModel.isRunning)
                 if let image = viewModel.previewImage {
                     HStack(alignment: .top, spacing: 12) {
                         Image(nsImage: image)
