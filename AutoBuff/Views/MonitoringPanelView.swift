@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum MonitorCoordinateReadout {
     static func positionText(_ point: CGPoint?) -> String {
@@ -25,6 +26,7 @@ enum MonitorCoordinateReadout {
 @available(macOS 14.0, *)
 struct MonitoringPanelView: View {
     @ObservedObject var viewModel: MainViewModel
+    @State private var showsRuneTestImporter = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -62,6 +64,12 @@ struct MonitoringPanelView: View {
             expReadout
 
             runeAlertReadout
+
+            runeAlertImageTestRow
+
+            safeZoneReadout
+
+            safeZoneControls
 
             HStack(spacing: 8) {
                 Circle()
@@ -255,6 +263,162 @@ struct MonitoringPanelView: View {
         .accessibilityIdentifier("monitor.runeAlertReadout")
     }
 
+    private var safeZoneReadout: some View {
+        let zone = viewModel.settings.monitorSafeZone
+        let isOutside = viewModel.monitorZoneOutside
+        return HStack(spacing: 12) {
+            Image(systemName: isOutside ? "figure.walk.departure" : "shield.checkered")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isOutside ? AppTheme.danger : AppTheme.textSecondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("安全区")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+                Text(safeZoneStatusText)
+                    .font(.system(size: 9))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if zone != nil {
+                Text(isOutside ? "已离开" : "区内")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isOutside ? AppTheme.danger : AppTheme.success)
+            } else {
+                Text("未设置")
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .background(
+            (isOutside ? AppTheme.danger.opacity(0.10) : AppTheme.accentSoft.opacity(0.55)),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(
+                    isOutside ? AppTheme.danger.opacity(0.45) : AppTheme.border.opacity(0.7),
+                    lineWidth: 1
+                )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("monitor.safeZoneReadout")
+    }
+
+    private var safeZoneStatusText: String {
+        guard let zone = viewModel.settings.monitorSafeZone else {
+            return "设置基准点后，角色离开范围会报警"
+        }
+        let center = String(
+            format: "中心 %.0f%% · %.0f%%",
+            zone.center.x * 100,
+            zone.center.y * 100
+        )
+        if viewModel.isRunning {
+            return viewModel.monitorZoneOutside
+                ? "角色已离开安全区，正在报警"
+                : "\(center)，角色在范围内"
+        }
+        return "\(center)，开始监控后生效"
+    }
+
+    /// 基准点用与跟补相同的点击取点弹窗设置；长宽按小地图百分比调整，
+    /// 这样不依赖当前分辨率，换窗口大小也不用重设。
+    private var safeZoneControls: some View {
+        HStack(spacing: 8) {
+            Button(viewModel.settings.monitorSafeZone == nil ? "设置基准点" : "重设基准点") {
+                viewModel.requestMonitorZoneMarker()
+            }
+            .controlSize(.small)
+            .disabled(viewModel.isRunning)
+            .help("停止监控后，在小地图上点击安全区中心")
+
+            Stepper(
+                value: $viewModel.monitorZoneWidthPercent,
+                in: 2...100,
+                step: 5
+            ) {
+                Text(String(format: "宽 %.0f%%", viewModel.monitorZoneWidthPercent))
+                    .font(.system(size: 10, design: .monospaced))
+                    .monospacedDigit()
+            }
+            .disabled(viewModel.settings.monitorSafeZone == nil)
+            .fixedSize()
+
+            Stepper(
+                value: $viewModel.monitorZoneHeightPercent,
+                in: 2...100,
+                step: 5
+            ) {
+                Text(String(format: "高 %.0f%%", viewModel.monitorZoneHeightPercent))
+                    .font(.system(size: 10, design: .monospaced))
+                    .monospacedDigit()
+            }
+            .disabled(viewModel.settings.monitorSafeZone == nil)
+            .fixedSize()
+
+            if viewModel.settings.monitorSafeZone != nil {
+                Button("清除") {
+                    viewModel.clearMonitorSafeZone()
+                }
+                .controlSize(.small)
+                .disabled(viewModel.isRunning)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .accessibilityIdentifier("monitor.safeZoneControls")
+    }
+
+    /// 用本地截图回放整条符文链路，方便在不等游戏真的出符文的情况下验证。
+    private var runeAlertImageTestRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                showsRuneTestImporter = true
+            } label: {
+                Label("图片测试", systemImage: "photo.badge.checkmark")
+            }
+            .controlSize(.small)
+            .disabled(!viewModel.isRunning || viewModel.monitorRuneTestBusy)
+            .help("选择符文截图，走一遍识别、面板提示和推送")
+
+            Text(runeTestHintText)
+                .font(.system(size: 9))
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .fileImporter(
+            isPresented: $showsRuneTestImporter,
+            allowedContentTypes: [.png, .jpeg, .image],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                viewModel.runRuneAlertImageTest(urls: urls)
+            case .failure(let error):
+                viewModel.reportRuneAlertImageTestFailure(error)
+            }
+        }
+        .accessibilityIdentifier("monitor.runeAlertImageTest")
+    }
+
+    private var runeTestHintText: String {
+        if !viewModel.monitorRuneTestSummary.isEmpty {
+            return viewModel.monitorRuneTestSummary
+        }
+        return viewModel.isRunning
+            ? "选择符文截图，走一遍识别与推送"
+            : "开始监控后可用截图回放验证"
+    }
+
     private var remoteAccountSection: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
@@ -346,7 +510,9 @@ struct MonitoringPanelView: View {
                     playerPoint: viewModel.monitorPlayerPoint,
                     teammatePoints: viewModel.monitorTeammatePoints,
                     otherPlayerPoints: viewModel.monitorOtherPlayerPoints,
-                    playerContentSize: viewModel.monitorContentSize
+                    playerContentSize: viewModel.monitorContentSize,
+                    safeZone: viewModel.settings.monitorSafeZone,
+                    isOutsideSafeZone: viewModel.monitorZoneOutside
                 )
             }
 

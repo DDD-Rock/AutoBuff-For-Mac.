@@ -8,6 +8,8 @@ struct MapTopologyOverlayView: View {
     let teammatePoints: [CGPoint]
     let otherPlayerPoints: [CGPoint]
     let playerContentSize: CGSize
+    var safeZone: MonitorSafeZone? = nil
+    var isOutsideSafeZone = false
 
     var body: some View {
         Canvas { context, size in
@@ -17,6 +19,8 @@ struct MapTopologyOverlayView: View {
                 teammatePoints: teammatePoints,
                 otherPlayerPoints: otherPlayerPoints,
                 playerContentSize: playerContentSize,
+                safeZone: safeZone,
+                isOutsideSafeZone: isOutsideSafeZone,
                 context: &context,
                 size: size
             )
@@ -63,15 +67,46 @@ enum MapTopologyOverlayRenderer {
         ]
     }
 
+    /// 安全区矩形画在最底层，避免盖住玩家和地图标注。
+    static func drawSafeZone(
+        _ zone: MonitorSafeZone,
+        isOutside: Bool,
+        context: inout GraphicsContext,
+        size: CGSize
+    ) {
+        let rect = zone.rect(in: size)
+        guard rect.width > 0, rect.height > 0 else { return }
+        let color: Color = isOutside ? .red : .green
+        context.fill(
+            Path(roundedRect: rect, cornerRadius: 3),
+            with: .color(color.opacity(0.10))
+        )
+        context.stroke(
+            Path(roundedRect: rect, cornerRadius: 3),
+            with: .color(color.opacity(isOutside ? 0.95 : 0.7)),
+            style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])
+        )
+    }
+
     static func draw(
         topology: MapTopology?,
         playerPoint: CGPoint? = nil,
         teammatePoints: [CGPoint] = [],
         otherPlayerPoints: [CGPoint] = [],
         playerContentSize: CGSize = .zero,
+        safeZone: MonitorSafeZone? = nil,
+        isOutsideSafeZone: Bool = false,
         context: inout GraphicsContext,
         size: CGSize
     ) {
+        if let safeZone {
+            drawSafeZone(
+                safeZone,
+                isOutside: isOutsideSafeZone,
+                context: &context,
+                size: size
+            )
+        }
         if let topology {
             for (index, platform) in topology.platforms.enumerated() where platform.points.count >= 2 {
                 var path = Path()

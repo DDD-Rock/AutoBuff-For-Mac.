@@ -20,6 +20,7 @@ final class MainViewModel: ObservableObject {
     @Published var showVirtualKeyboard = false
     @Published var showPortalMarker = false
     @Published var showFollowHealMarker = false
+    @Published var showMonitorZoneMarker = false
     @Published var showMapTopologyEditor = false
     @Published var isCheckingPortalMarker = false
     @Published var portalMarkerAlert: PortalMarkerAlert?
@@ -41,6 +42,9 @@ final class MainViewModel: ObservableObject {
     @Published var monitorEXPStatus = "尚未开始识别 EXP"
     @Published var monitorRuneAlertPresent = false
     @Published var monitorRuneAlertDetection: RuneAlertDetection?
+    @Published var monitorRuneTestBusy = false
+    @Published var monitorRuneTestSummary = ""
+    @Published var monitorZoneOutside = false
     @Published var remoteMonitorPassword = ""
     @Published var remoteMonitorAuthenticated = false
     @Published var remoteMonitorAuthBusy = false
@@ -59,6 +63,10 @@ final class MainViewModel: ObservableObject {
     private var screenRecordingRequestIssued = false
     private var reportedPersistenceErrors: Set<String> = []
     private var remoteMonitorPublishURL = ""
+    /// 图片回放测试期间为 true，此时忽略实时识别结果，避免注入的状态被覆盖。
+    private var isRuneTestHolding = false
+    private var runeTestHoldTask: Task<Void, Never>?
+    private var safeZoneStabilizer = SafeZoneStabilizer()
 
     enum KeyboardTarget: Equatable {
         case buff(Int)
@@ -377,6 +385,84 @@ final class MainViewModel: ObservableObject {
         showFollowHealMarker = true
     }
 
+    /// 打开「监控安全区基准点」标记弹窗。
+    ///
+    /// 和跟补基准点共用 `PortalMarkerView` 的点击取点交互，但两者互不影响：
+    /// 跟补存的是绝对像素的 healAnchorX/Y，这里存的是归一化的 monitorSafeZone。
+    func requestMonitorZoneMarker() {
+        guard !isRunning else { return }
+        guard let window = selectedWindow else {
+            portalMarkerAlert = PortalMarkerAlert(message: "请先识别游戏窗口。")
+            return
+        }
+        guard windowSelector.isWindowValid(windowID: window.windowID) else {
+            selectedWindow = nil
+            windowStatusText = "未识别"
+            portalMarkerAlert = PortalMarkerAlert(message: "游戏窗口已失效，请重新识别。")
+            return
+        }
+        guard screenRecordingGranted else {
+            portalMarkerAlert = PortalMarkerAlert(message: "标记安全区基准点需要屏幕录制权限。")
+            requestScreenRecording()
+            return
+        }
+        showMonitorZoneMarker = true
+    }
+
+    /// 保存标记结果。`region` 的宽高就是当时小地图内容区的尺寸，用它做归一化。
+    func applyMonitorZoneAnchor(x: Int?, y: Int?, region: CGRect?) {
+        guard let x, let y, let region, region.width > 0, region.height > 0 else {
+            clearMonitorSafeZone()
+            return
+        }
+        let previous = settings.monitorSafeZone
+        settings.monitorSafeZone = MonitorSafeZone(
+            center: NormalizedMapPoint(
+                CGPoint(x: CGFloat(x), y: CGFloat(y)),
+                in: region.size
+            ),
+            width: previous?.width ?? Self.defaultZoneSideRatio,
+            height: previous?.height ?? Self.defaultZoneSideRatio
+        )
+        saveSettings()
+        safeZoneStabilizer.reset()
+        monitorZoneOutside = false
+        appendLog("安全区基准点已设置")
+    }
+
+    func clearMonitorSafeZone() {
+        guard settings.monitorSafeZone != nil else { return }
+        settings.monitorSafeZone = nil
+        saveSettings()
+        safeZoneStabilizer.reset()
+        monitorZoneOutside = false
+        appendLog("安全区已清除")
+    }
+
+    static let defaultZoneSideRatio = 0.35
+
+    /// 安全区宽度占小地图的百分比。用百分比而不是像素，是因为没开始监控时
+    /// 拿不到当前内容区尺寸，而百分比本身就是存储用的归一化值。
+    var monitorZoneWidthPercent: Double {
+        get { (settings.monitorSafeZone?.width ?? Self.defaultZoneSideRatio) * 100 }
+        set { updateMonitorSafeZone(width: newValue / 100, height: nil) }
+    }
+
+    var monitorZoneHeightPercent: Double {
+        get { (settings.monitorSafeZone?.height ?? Self.defaultZoneSideRatio) * 100 }
+        set { updateMonitorSafeZone(width: nil, height: newValue / 100) }
+    }
+
+    private func updateMonitorSafeZone(width: Double?, height: Double?) {
+        guard let zone = settings.monitorSafeZone else { return }
+        settings.monitorSafeZone = MonitorSafeZone(
+            center: zone.center,
+            width: width ?? zone.width,
+            height: height ?? zone.height
+        )
+        saveSettings()
+    }
+
     func requestMapTopologyEditor() {
         guard !isRunning else { return }
         guard let window = selectedWindow else {
@@ -617,6 +703,10 @@ final class MainViewModel: ObservableObject {
             monitorMatchedTopology = frame.matchedTopology
             monitorFPS = frame.framesPerSecond
             remoteMonitorClient.publish(frame: frame)
+            evaluateSafeZone(
+                playerPoint: frame.playerPoint,
+                contentSize: CGSize(width: frame.buffer.width, height: frame.buffer.height)
+            )
         }
         monitoringSession.onStatus = { [weak self] status in
             self?.monitorStatusText = status
@@ -634,6 +724,7 @@ final class MainViewModel: ObservableObject {
         }
         monitoringSession.onRuneAlert = { [weak self] isPresent, detection in
             guard let self else { return }
+            guard !isRuneTestHolding else { return }
             if isPresent != monitorRuneAlertPresent {
                 appendLog(isPresent ? "⚠️ 检测到符文诅咒提示" : "符文诅咒提示已消失")
             }
@@ -711,7 +802,111 @@ final class MainViewModel: ObservableObject {
         }
     }
 
+    /// 每帧判断角色是否还在安全区内，防抖后上报。
+    ///
+    /// 没配置安全区时也要上报一次「未越界且无矩形」，让网页停止画框；
+    /// 之后由发布策略的心跳节流兜住，不会每帧都发。
+    private func evaluateSafeZone(playerPoint: CGPoint?, contentSize: CGSize) {
+        guard let zone = settings.monitorSafeZone else {
+            if safeZoneStabilizer.isOutside || monitorZoneOutside {
+                safeZoneStabilizer.reset()
+                monitorZoneOutside = false
+            }
+            remoteMonitorClient.publishZone(isOutside: false, zone: nil)
+            return
+        }
+
+        // 黄点没识别到时传 nil：找不到角色不等于角色跑了，不能据此报警。
+        let observation = playerPoint.map { !zone.contains($0, in: contentSize) }
+        switch safeZoneStabilizer.update(observedOutside: observation) {
+        case .none:
+            break
+        case .breached:
+            appendLog("⚠️ 角色已离开安全区")
+        case .returned:
+            appendLog("角色已回到安全区")
+        case .lostTrack:
+            let seconds = SafeZoneStabilizer.lostMarkerGracePeriod.components.seconds
+            appendLog("已连续 \(seconds) 秒识别不到角色，暂停安全区报警")
+        }
+        monitorZoneOutside = safeZoneStabilizer.isOutside
+        remoteMonitorClient.publishZone(isOutside: safeZoneStabilizer.isOutside, zone: zone)
+    }
+
+    /// 用本地图片回放整条符文链路：识别 → 面板提示 → 上报 → 服务端推送。
+    ///
+    /// 只在监控运行中可用，因为远程发布通道是随监控一起建立的。
+    func runRuneAlertImageTest(urls: [URL]) {
+        guard !monitorRuneTestBusy else { return }
+        guard !urls.isEmpty else {
+            monitorRuneTestSummary = "没有选择图片"
+            return
+        }
+        guard isRunning else {
+            monitorRuneTestSummary = "请先开始监控，再用图片测试"
+            return
+        }
+
+        monitorRuneTestBusy = true
+        monitorRuneTestSummary = "正在识别 \(urls.count) 张图片..."
+        Task { [weak self] in
+            let report = await Task.detached(priority: .userInitiated) {
+                RuneAlertImageTestRunner.run(urls: urls)
+            }.value
+            self?.applyRuneAlertImageTestReport(report)
+        }
+    }
+
+    func reportRuneAlertImageTestFailure(_ error: Error) {
+        monitorRuneTestSummary = "选择图片失败：\(error.localizedDescription)"
+        appendLog(monitorRuneTestSummary)
+    }
+
+    private func applyRuneAlertImageTestReport(_ report: RuneAlertImageTestReport) {
+        monitorRuneTestBusy = false
+        monitorRuneTestSummary = report.summary
+        appendLog("符文图片测试：\(report.summary)")
+
+        guard let strongest = report.strongest, let detection = strongest.detection else {
+            appendLog("没有识别到符文，未触发上报和推送")
+            return
+        }
+        holdRuneAlertForTest(detection: detection, fileName: strongest.fileName)
+    }
+
+    /// 注入「有符文」状态并保持一段时间，让服务端那一轮扫描能看到它。
+    private func holdRuneAlertForTest(detection: RuneAlertDetection, fileName: String) {
+        runeTestHoldTask?.cancel()
+        isRuneTestHolding = true
+        monitorRuneAlertPresent = true
+        monitorRuneAlertDetection = detection
+        remoteMonitorClient.publishRuneAlert(isPresent: true, detection: detection)
+
+        let seconds = RuneAlertImageTestPolicy.stateHoldDuration.components.seconds
+        appendLog("已按 \(fileName) 上报符文状态，保持 \(seconds) 秒等待推送")
+
+        runeTestHoldTask = Task { [weak self] in
+            try? await Task.sleep(for: RuneAlertImageTestPolicy.stateHoldDuration)
+            guard !Task.isCancelled else { return }
+            self?.releaseRuneAlertTestHold(restoreState: true)
+        }
+    }
+
+    private func releaseRuneAlertTestHold(restoreState: Bool) {
+        runeTestHoldTask?.cancel()
+        runeTestHoldTask = nil
+        guard isRuneTestHolding else { return }
+        isRuneTestHolding = false
+        guard restoreState else { return }
+        monitorRuneAlertPresent = false
+        monitorRuneAlertDetection = nil
+        remoteMonitorClient.publishRuneAlert(isPresent: false, detection: nil)
+        appendLog("符文测试状态已恢复，实时识别继续接管")
+    }
+
     private func clearMonitorState(status: String) {
+        // 监控停止时发布通道已经断开，再上报「无符文」没有意义，只复位本地状态。
+        releaseRuneAlertTestHold(restoreState: false)
         monitorImage = nil
         monitorContentSize = .zero
         monitorPlayerPoint = nil
@@ -723,6 +918,8 @@ final class MainViewModel: ObservableObject {
         monitorEXPStatus = "尚未开始识别 EXP"
         monitorRuneAlertPresent = false
         monitorRuneAlertDetection = nil
+        safeZoneStabilizer.reset()
+        monitorZoneOutside = false
         monitorStatusText = status
     }
 

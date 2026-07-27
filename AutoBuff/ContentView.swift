@@ -105,6 +105,23 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $viewModel.showMonitorZoneMarker) {
+            if let window = viewModel.selectedWindow {
+                // 安全区存的是归一化坐标，而这个弹窗按像素预填；标记时监控已停止，
+                // 拿不到当前内容区尺寸，所以不预填，每次重新点一次中心点。
+                PortalMarkerView(
+                    windowID: window.windowID,
+                    existingX: nil,
+                    existingY: nil,
+                    title: "标记安全区基准点",
+                    showAutoPortal: false,
+                    clearButtonTitle: "清除安全区",
+                    loadedStatusText: "点击小地图设置安全区中心，长宽在监控面板里按百分比调整"
+                ) { x, y, region in
+                    viewModel.applyMonitorZoneAnchor(x: x, y: y, region: region)
+                }
+            }
+        }
         .sheet(isPresented: $viewModel.showMapTopologyEditor) {
             if let window = viewModel.selectedWindow {
                 MapTopologyLibraryView(

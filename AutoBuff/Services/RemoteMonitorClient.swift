@@ -194,20 +194,33 @@ private struct RemoteRunePayload: Encodable {
     let detectedAt: Int64
 }
 
-/// 符文状态的上报节奏。
+private struct RemoteZoneRect: Encodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+private struct RemoteZonePayload: Encodable {
+    let outside: Bool
+    let rect: RemoteZoneRect?
+    let detectedAt: Int64
+}
+
+/// 布尔型监控状态（符文提示、安全区越界）的上报节奏。
 ///
 /// 状态一变化就立刻发送，让服务器第一时间知道；状态没变化时按心跳间隔
-/// 重发，服务器据此判断数据是否新鲜，客户端掉线后不会被当成符文仍在。
-enum RuneAlertPublishPolicy {
+/// 重发，服务器据此判断数据是否新鲜，客户端掉线后不会被当成状态仍然成立。
+enum MonitorStatePublishPolicy {
     static let heartbeatInterval = Duration.seconds(3)
 
     static func shouldSend(
-        isPresent: Bool,
+        isActive: Bool,
         lastSentState: Bool?,
         sinceLastSend: Duration
     ) -> Bool {
         guard let lastSentState else { return true }
-        return lastSentState != isPresent || sinceLastSend >= heartbeatInterval
+        return lastSentState != isActive || sinceLastSend >= heartbeatInterval
     }
 }
 
@@ -231,6 +244,9 @@ final class RemoteMonitorClient {
     private var pendingRuneMessage: Data?
     private var lastRuneState: Bool?
     private var lastRuneSentAt = ContinuousClock.now
+    private var pendingZoneMessage: Data?
+    private var lastZoneState: Bool?
+    private var lastZoneSentAt = ContinuousClock.now
 
     func loadStoredAccessToken() async -> String? {
         await Task.detached(priority: .utility) {
@@ -398,8 +414,8 @@ final class RemoteMonitorClient {
 
     func publishRuneAlert(isPresent: Bool, detection: RuneAlertDetection?) {
         guard socket != nil else { return }
-        guard RuneAlertPublishPolicy.shouldSend(
-            isPresent: isPresent,
+        guard MonitorStatePublishPolicy.shouldSend(
+            isActive: isPresent,
             lastSentState: lastRuneState,
             sinceLastSend: lastRuneSentAt.duration(to: .now)
         ) else {
@@ -412,6 +428,37 @@ final class RemoteMonitorClient {
             payload: RemoteRunePayload(
                 detected: isPresent,
                 confidence: isPresent ? detection?.confidence : nil,
+                detectedAt: Int64(Date().timeIntervalSince1970 * 1000)
+            )
+        )
+    }
+
+    /// 上报安全区状态。`zone` 为 nil 表示用户没有配置安全区，
+    /// 此时发一条不带矩形的「未越界」，让网页停止画框。
+    func publishZone(isOutside: Bool, zone: MonitorSafeZone?) {
+        guard socket != nil else { return }
+        guard MonitorStatePublishPolicy.shouldSend(
+            isActive: isOutside,
+            lastSentState: lastZoneState,
+            sinceLastSend: lastZoneSentAt.duration(to: .now)
+        ) else {
+            return
+        }
+        lastZoneState = isOutside
+        lastZoneSentAt = .now
+        let rect = zone?.normalizedRect
+        send(
+            type: "zone",
+            payload: RemoteZonePayload(
+                outside: isOutside,
+                rect: rect.map {
+                    RemoteZoneRect(
+                        x: $0.minX,
+                        y: $0.minY,
+                        width: $0.width,
+                        height: $0.height
+                    )
+                },
                 detectedAt: Int64(Date().timeIntervalSince1970 * 1000)
             )
         )
@@ -471,6 +518,8 @@ final class RemoteMonitorClient {
                 pendingEXPMessage = data
             case "rune":
                 pendingRuneMessage = data
+            case "zone":
+                pendingZoneMessage = data
             default:
                 pendingControlMessages.append(data)
                 if pendingControlMessages.count > 4 {
@@ -491,9 +540,12 @@ final class RemoteMonitorClient {
         if !pendingControlMessages.isEmpty {
             message = pendingControlMessages.removeFirst()
         } else if let pendingRuneMessage {
-            // 符文告警最紧急，排在 EXP 和位置帧之前。
+            // 告警类消息最紧急，排在 EXP 和位置帧之前。
             message = pendingRuneMessage
             self.pendingRuneMessage = nil
+        } else if let pendingZoneMessage {
+            message = pendingZoneMessage
+            self.pendingZoneMessage = nil
         } else if let pendingEXPMessage {
             message = pendingEXPMessage
             self.pendingEXPMessage = nil
@@ -524,8 +576,10 @@ final class RemoteMonitorClient {
         pendingFrameMessage = nil
         pendingEXPMessage = nil
         pendingRuneMessage = nil
-        // 重连后必须重新上报一次符文状态，不能沿用断线前的判断。
+        pendingZoneMessage = nil
+        // 重连后必须重新上报一次告警状态，不能沿用断线前的判断。
         lastRuneState = nil
+        lastZoneState = nil
     }
 
     private func request<Response: Decodable, Body: Encodable>(

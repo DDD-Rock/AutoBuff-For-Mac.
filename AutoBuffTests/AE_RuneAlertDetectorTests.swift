@@ -190,16 +190,16 @@ struct RuneAlertDetectorTests {
     @Test func reportsRuneStateChangeImmediately() {
         // 首次上报没有历史状态，必须发送。
         #expect(
-            RuneAlertPublishPolicy.shouldSend(
-                isPresent: false,
+            MonitorStatePublishPolicy.shouldSend(
+                isActive: false,
                 lastSentState: nil,
                 sinceLastSend: .zero
             )
         )
         // 状态刚变化，不等心跳间隔立刻发送。
         #expect(
-            RuneAlertPublishPolicy.shouldSend(
-                isPresent: true,
+            MonitorStatePublishPolicy.shouldSend(
+                isActive: true,
                 lastSentState: false,
                 sinceLastSend: .milliseconds(1)
             )
@@ -208,24 +208,24 @@ struct RuneAlertDetectorTests {
 
     @Test func throttlesUnchangedRuneStateToHeartbeatInterval() {
         #expect(
-            !RuneAlertPublishPolicy.shouldSend(
-                isPresent: true,
+            !MonitorStatePublishPolicy.shouldSend(
+                isActive: true,
                 lastSentState: true,
                 sinceLastSend: .seconds(1)
             )
         )
         #expect(
-            RuneAlertPublishPolicy.shouldSend(
-                isPresent: true,
+            MonitorStatePublishPolicy.shouldSend(
+                isActive: true,
                 lastSentState: true,
-                sinceLastSend: RuneAlertPublishPolicy.heartbeatInterval
+                sinceLastSend: MonitorStatePublishPolicy.heartbeatInterval
             )
         )
     }
 
     @Test func heartbeatIsFasterThanServerStaleWindow() {
-        // 服务端把超过 12 秒没更新的符文状态视为过期，心跳必须明显更快。
-        #expect(RuneAlertPublishPolicy.heartbeatInterval < .seconds(12))
+        // 服务端把超过 12 秒没更新的告警状态视为过期，心跳必须明显更快。
+        #expect(MonitorStatePublishPolicy.heartbeatInterval < .seconds(12))
     }
 
     // MARK: - 识别节奏

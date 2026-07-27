@@ -88,6 +88,7 @@ struct AppSettings: Codable, Equatable {
     var monitorDisplayMode: MonitorDisplayMode = .minimapWithAnnotations
     var monitorServerBaseURL: String = "http://106.52.208.129:28671"
     var monitorAccountUsername: String = ""
+    var monitorSafeZone: MonitorSafeZone? = nil
     var buffs: [BuffConfig]
 
     static var `default`: AppSettings {
@@ -127,6 +128,7 @@ extension AppSettings {
         case monitorDisplayMode
         case monitorServerBaseURL
         case monitorAccountUsername
+        case monitorSafeZone
         case buffs
     }
 
@@ -171,6 +173,10 @@ extension AppSettings {
             String.self,
             forKey: .monitorAccountUsername
         ) ?? ""
+        self.monitorSafeZone = try container.decodeIfPresent(
+            MonitorSafeZone.self,
+            forKey: .monitorSafeZone
+        )
         self.buffs = try container.decodeIfPresent([BuffConfig].self, forKey: .buffs) ?? AppSettings.default.buffs
     }
 
@@ -202,6 +208,7 @@ extension AppSettings {
         try container.encode(monitorDisplayMode, forKey: .monitorDisplayMode)
         try container.encode(monitorServerBaseURL, forKey: .monitorServerBaseURL)
         try container.encode(monitorAccountUsername, forKey: .monitorAccountUsername)
+        try container.encodeIfPresent(monitorSafeZone, forKey: .monitorSafeZone)
         try container.encode(buffs, forKey: .buffs)
     }
 }
