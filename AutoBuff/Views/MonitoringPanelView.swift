@@ -338,29 +338,8 @@ struct MonitoringPanelView: View {
             .disabled(viewModel.isRunning)
             .help("停止监控后，在小地图上点击安全区中心")
 
-            Stepper(
-                value: $viewModel.monitorZoneWidthPercent,
-                in: 2...100,
-                step: 5
-            ) {
-                Text(String(format: "宽 %.0f%%", viewModel.monitorZoneWidthPercent))
-                    .font(.system(size: 10, design: .monospaced))
-                    .monospacedDigit()
-            }
-            .disabled(viewModel.settings.monitorSafeZone == nil)
-            .fixedSize()
-
-            Stepper(
-                value: $viewModel.monitorZoneHeightPercent,
-                in: 2...100,
-                step: 5
-            ) {
-                Text(String(format: "高 %.0f%%", viewModel.monitorZoneHeightPercent))
-                    .font(.system(size: 10, design: .monospaced))
-                    .monospacedDigit()
-            }
-            .disabled(viewModel.settings.monitorSafeZone == nil)
-            .fixedSize()
+            zoneSideStepper(title: "宽", percent: $viewModel.monitorZoneWidthPercent)
+            zoneSideStepper(title: "高", percent: $viewModel.monitorZoneHeightPercent)
 
             if viewModel.settings.monitorSafeZone != nil {
                 Button("清除") {
@@ -375,25 +354,44 @@ struct MonitoringPanelView: View {
         .accessibilityIdentifier("monitor.safeZoneControls")
     }
 
+    /// 标签用固定宽度：百分比在 2%~100% 之间变化时行的固有宽度保持不变，
+    /// 不会因为多一位数字就重新协商整行布局。
+    private func zoneSideStepper(title: String, percent: Binding<Double>) -> some View {
+        Stepper(value: percent, in: 2...100, step: 5) {
+            Text(String(format: "%@ %.0f%%", title, percent.wrappedValue))
+                .font(.system(size: 10, design: .monospaced))
+                .monospacedDigit()
+                .frame(width: 52, alignment: .leading)
+        }
+        .disabled(viewModel.settings.monitorSafeZone == nil)
+        .fixedSize()
+    }
+
     /// 用本地截图回放整条符文链路，方便在不等游戏真的出符文的情况下验证。
     private var runeAlertImageTestRow: some View {
-        HStack(spacing: 8) {
-            Button {
-                showsRuneTestImporter = true
-            } label: {
-                Label("图片测试", systemImage: "photo.badge.checkmark")
-            }
-            .controlSize(.small)
-            .disabled(!viewModel.isRunning || viewModel.monitorRuneTestBusy)
-            .help("选择符文截图，走一遍识别、面板提示和推送")
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Button {
+                    showsRuneTestImporter = true
+                } label: {
+                    Label("图片测试", systemImage: "photo.badge.checkmark")
+                }
+                .controlSize(.small)
+                .disabled(!viewModel.isRunning || viewModel.monitorRuneTestBusy)
+                .help("选择符文截图，走一遍识别、面板提示和推送")
 
+                Spacer(minLength: 0)
+            }
+
+            // 结果文案单独一行铺满宽度。它不能和按钮同行、也不能用 fixedSize
+            // 反推高度：文案里可能带一串文件名，单行理想宽度远超窗口，
+            // 会被 AppKit 反复重算结构区域直到抛异常。
             Text(runeTestHintText)
                 .font(.system(size: 9))
                 .foregroundStyle(AppTheme.textSecondary)
                 .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: 0)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .fileImporter(
             isPresented: $showsRuneTestImporter,
