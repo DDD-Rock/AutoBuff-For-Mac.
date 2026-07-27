@@ -5,6 +5,7 @@ enum FollowHealNavigation {
     static let arrivalTolerance: CGFloat = 3.0
     static let movementObservedTolerance: CGFloat = 1.0
     static let anchorBandTolerance: CGFloat = 6.0
+    static let playerMarkerMinArea = 5
     static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 12...15
 
     static func directionToBase(currentX: CGFloat, baseX: CGFloat) -> HumanInput.Direction? {
@@ -42,14 +43,17 @@ final class FollowHealWorker: ObservableObject {
     private var task: Task<Void, Never>?
     private var runID = UUID()
     private(set) var isRunning = false
+    private var nextPlayerCoordinateLogAt: TimeInterval = 0
 
     private let batchCastWindow = 10.0
+    private let playerCoordinateLogInterval: TimeInterval = 1.0
 
     func start(settings: AppSettings, windowID: CGWindowID) {
         stop()
         let currentRunID = UUID()
         runID = currentRunID
         isRunning = true
+        nextPlayerCoordinateLogAt = 0
         countdownPublisher.start { [weak self] info in
             self?.onCountdown?(info)
         }
@@ -72,11 +76,6 @@ final class FollowHealWorker: ObservableObject {
         let buffs = settings.buffs.filter {
             $0.enabled && !$0.key.isEmpty && $0.duration > 0
         }
-        guard !buffs.isEmpty else {
-            onError?("没有可运行的 Buff 配置")
-            await finish(runID: currentRunID)
-            return
-        }
         guard !settings.healSkillKey.isEmpty else {
             onError?("请先设置加血技能键")
             await finish(runID: currentRunID)
@@ -89,6 +88,9 @@ final class FollowHealWorker: ObservableObject {
         }
 
         log("跟补模式启动...")
+        if buffs.isEmpty {
+            log("未启用 BUFF，将只执行补血和位置修正")
+        }
         guard await ensureGameFocus(windowID: windowID, reason: "跟补启动") else {
             onError?("无法将游戏窗口置于前台")
             await finish(runID: currentRunID)
@@ -98,9 +100,20 @@ final class FollowHealWorker: ObservableObject {
         let baseX = CGFloat(healAnchorX)
         log("使用手动跟补基准点 X=\(format(baseX))")
         if let savedRegion = settings.healMinimapRegion {
+            minimap.clearMinimapRegion()
             minimap.setMinimapRegion(savedRegion)
-            log("使用标记时的小地图区域 \(Int(savedRegion.width))×\(Int(savedRegion.height))")
+            // The marked anchor is the destination, not necessarily the
+            // player's current position. Biasing the first detection toward it
+            // can lock tracking onto a static yellow map decoration.
+            minimap.setExpectedPlayerPoint(nil)
+            log(
+                "使用标记时的小地图区域 x=\(Int(savedRegion.minX)), "
+                    + "y=\(Int(savedRegion.minY)), "
+                    + "\(Int(savedRegion.width))×\(Int(savedRegion.height))"
+            )
         } else {
+            minimap.clearMinimapRegion()
+            minimap.setExpectedPlayerPoint(nil)
             log("未保存小地图区域，将在补血后再识别，避免开局空等")
         }
 
@@ -145,21 +158,29 @@ final class FollowHealWorker: ObservableObject {
                 continue
             }
 
-            if let player = try? await minimap.findPlayerPosition() {
+            if let player = try? await minimap.findPlayerPosition(
+                minArea: FollowHealNavigation.playerMarkerMinArea
+            ) {
                 missingPlayerCount = 0
+                logPlayerCoordinateIfDue(
+                    player,
+                    baseX: baseX,
+                    phase: "常规检测"
+                )
                 if abs(player.x - lastKnownX) > FollowHealNavigation.movementObservedTolerance {
                     lastKnownX = player.x
                 }
 
                 if FollowHealNavigation.isOutsideAnchorBand(currentX: player.x, baseX: baseX) {
                     log("检测到离开基准区域：当前X=\(format(player.x))，基准X=\(format(baseX))")
-                    await returnToBase(
+                    let canContinue = await returnToBase(
                         baseX: baseX,
                         startX: player.x,
                         buffs: buffs,
                         nextCast: &nextCast,
                         windowID: windowID
                     )
+                    if !canContinue { break }
                     continue
                 }
 
@@ -201,14 +222,14 @@ final class FollowHealWorker: ObservableObject {
         buffs: [BuffConfig],
         nextCast: inout [Int: TimeInterval],
         windowID: CGWindowID
-    ) async {
+    ) async -> Bool {
         var currentX = startX
         guard var currentDirection = FollowHealNavigation.directionToBase(currentX: currentX, baseX: baseX) else {
             await human.stopMove()
-            return
+            return true
         }
         guard await ensureGameFocus(windowID: windowID, reason: "回基准区域") else {
-            return
+            return false
         }
         if currentDirection == .left {
             await human.moveLeft()
@@ -219,23 +240,30 @@ final class FollowHealWorker: ObservableObject {
         let startedAt = Date().timeIntervalSince1970
         while isRunning && !Task.isCancelled {
             if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) {
-                return
+                return true
             }
             await sleep(Double.random(in: 0.08...0.14))
-            guard let player = try? await minimap.findPlayerPosition() else {
+            guard let player = try? await minimap.findPlayerPosition(
+                minArea: FollowHealNavigation.playerMarkerMinArea
+            ) else {
                 await human.stopMove()
                 log("⚠️ 回基准区域时丢失玩家黄点，停止移动")
-                return
+                return true
             }
             currentX = player.x
+            logPlayerCoordinateIfDue(
+                player,
+                baseX: baseX,
+                phase: "回基准移动"
+            )
             if !FollowHealNavigation.isOutsideAnchorBand(currentX: currentX, baseX: baseX) {
                 await human.stopMove()
                 log("已回到基准区域：当前X=\(format(currentX))，基准X=\(format(baseX))")
-                return
+                return true
             }
             guard let neededDirection = FollowHealNavigation.directionToBase(currentX: currentX, baseX: baseX) else {
                 await human.stopMove()
-                return
+                return true
             }
             if neededDirection != currentDirection {
                 await human.stopMove()
@@ -250,10 +278,11 @@ final class FollowHealWorker: ObservableObject {
             if Date().timeIntervalSince1970 - startedAt > 5 {
                 await human.stopMove()
                 log("⚠️ 回基准区域超时，停止移动等待下轮检测")
-                return
+                return true
             }
         }
         await human.stopMove()
+        return true
     }
 
     private func centerAdjustStep(
@@ -478,6 +507,20 @@ final class FollowHealWorker: ObservableObject {
 
     private func format(_ value: CGFloat) -> String {
         String(format: "%.1f", value)
+    }
+
+    private func logPlayerCoordinateIfDue(
+        _ point: CGPoint,
+        baseX: CGFloat,
+        phase: String
+    ) {
+        let now = Date().timeIntervalSince1970
+        guard now >= nextPlayerCoordinateLogAt else { return }
+        nextPlayerCoordinateLogAt = now + playerCoordinateLogInterval
+        log(
+            "黄点坐标 [\(phase)] X=\(format(point.x)), "
+                + "Y=\(format(point.y)), 基准X=\(format(baseX))"
+        )
     }
 
     private func log(_ message: String) {

@@ -1,9 +1,27 @@
 import AppKit
 import SwiftUI
 
-final class AutoBuffAppDelegate: NSObject, NSApplicationDelegate {
-    private var didApplyInitialWindowSize = false
+enum MainWindowLayout {
+    static let minimumContentWidth: CGFloat = 520
+    static let preferredContentWidth: CGFloat = 580
+    static func usesCompactSidebar(prefersExpanded: Bool) -> Bool {
+        !prefersExpanded
+    }
 
+    static func preferredContentHeight(
+        visibleScreenHeight: CGFloat,
+        windowChromeHeight: CGFloat
+    ) -> CGFloat {
+        let availableHeight = max(
+            500,
+            visibleScreenHeight - max(0, windowChromeHeight) - 32
+        )
+        let proportionalHeight = visibleScreenHeight * 0.82
+        return min(availableHeight, min(860, max(740, proportionalHeight)))
+    }
+}
+
+final class AutoBuffAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
         let currentProcessID = ProcessInfo.processInfo.processIdentifier
@@ -11,38 +29,10 @@ final class AutoBuffAppDelegate: NSObject, NSApplicationDelegate {
         where application.processIdentifier != currentProcessID {
             application.terminate()
         }
-        applyInitialWindowSize()
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        applyInitialWindowSize()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
-    }
-
-    private func applyInitialWindowSize() {
-        guard !didApplyInitialWindowSize else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self,
-                  !self.didApplyInitialWindowSize,
-                  let window = NSApp.windows.first(where: { $0.title == "YzY - Auto Buff" }) else {
-                return
-            }
-            window.setContentSize(NSSize(width: 520, height: 620))
-            window.minSize = NSSize(width: 480, height: 500)
-            window.makeFirstResponder(nil)
-            if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
-                window.setFrameOrigin(
-                    NSPoint(
-                        x: visibleFrame.midX - window.frame.width / 2,
-                        y: visibleFrame.midY - window.frame.height / 2
-                    )
-                )
-            }
-            self.didApplyInitialWindowSize = true
-        }
     }
 }
 
@@ -61,7 +51,10 @@ struct AutoBuffApp: App {
                     .padding()
             }
         }
-        .defaultSize(width: 520, height: 620)
-        .windowResizability(.contentMinSize)
+        .defaultSize(
+            width: MainWindowLayout.preferredContentWidth,
+            height: 820
+        )
+        .windowResizability(.automatic)
     }
 }

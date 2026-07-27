@@ -15,6 +15,8 @@ enum AppConstants {
     static let gameWindowTitlePrefix = "MapleStory Worlds-Artale"
     static let settingsDirectoryName = "AutoBuff"
     static let settingsFileName = "settings.json"
+    static let mapsFileName = "maps.json"
+    static let persistenceBackupCount = 5
 
     static let defaultBuffSlotCount = 3
     static let maxBuffSlotCount = 8

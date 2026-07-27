@@ -60,6 +60,10 @@ struct SettingsSectionView: View {
 
             Divider().overlay(AppTheme.border)
 
+            mapTopologyOption
+
+            Divider().overlay(AppTheme.border)
+
             if viewModel.mode == .liveFlower {
                 liveOptions
             } else if viewModel.mode == .deadFlower {
@@ -77,7 +81,7 @@ struct SettingsSectionView: View {
 
     private var partyInviteOption: some View {
         HStack(spacing: 10) {
-            Label("自动接队", systemImage: "person.2.badge.gearshape")
+            Label("自动同意组队", systemImage: "person.2.badge.gearshape")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(AppTheme.textPrimary)
             Spacer(minLength: 0)
@@ -95,6 +99,31 @@ struct SettingsSectionView: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.mini)
+        }
+        .frame(minHeight: 24)
+    }
+
+    private var mapTopologyOption: some View {
+        HStack(spacing: 10) {
+            Label("地图标注", systemImage: "map")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AppTheme.textPrimary)
+            Spacer(minLength: 0)
+            if !viewModel.settings.mapTopologies.isEmpty {
+                Text("已创建 \(viewModel.settings.mapTopologies.count) 张地图")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+            } else {
+                Text("未标注")
+                    .font(.system(size: 10))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+            Button("管理地图") {
+                viewModel.requestMapTopologyEditor()
+            }
+            .controlSize(.small)
+            .disabled(viewModel.isRunning)
         }
         .frame(minHeight: 24)
     }

@@ -35,7 +35,7 @@ final class AutoBuffUITests: XCTestCase {
         XCTAssertTrue(elements["window.identify"].exists)
         let workerButton = elements["worker.toggle"]
         XCTAssertTrue(workerButton.exists)
-        XCTAssertGreaterThan(workerButton.frame.width, 400)
+        XCTAssertGreaterThan(workerButton.frame.width, 220)
         XCTAssertTrue(elements["settings.title"].exists)
         XCTAssertTrue(elements["mode.dead"].exists)
         XCTAssertTrue(elements["mode.live"].exists)
@@ -53,9 +53,9 @@ final class AutoBuffUITests: XCTestCase {
         durationField.click()
         XCTAssertEqual(focusedRole(for: app), kAXTextFieldRole as String)
 
-        let subtitle = app.staticTexts["app.subtitle"]
-        XCTAssertTrue(subtitle.exists)
-        subtitle.click()
+        let appHeader = app.descendants(matching: .any)["app.title"]
+        XCTAssertTrue(appHeader.exists)
+        appHeader.click()
         XCTAssertNotEqual(focusedRole(for: app), kAXTextFieldRole as String)
     }
 

@@ -1,5 +1,6 @@
 import Accelerate
 import CoreGraphics
+import CoreVideo
 import Foundation
 
 struct ImageBuffer: Equatable, Sendable {
@@ -47,11 +48,51 @@ struct MatchResult: Equatable, Sendable {
 }
 
 enum ImagePipeline {
+    static func pixelBufferToBGRBuffer(_ pixelBuffer: CVPixelBuffer) -> ImageBuffer? {
+        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA else {
+            return nil
+        }
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0,
+              height > 0,
+              CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
+            return nil
+        }
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            return nil
+        }
+
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let source = baseAddress.assumingMemoryBound(to: UInt8.self)
+        var bgr = [UInt8](repeating: 0, count: width * height * 3)
+        bgr.withUnsafeMutableBytes { destinationBytes in
+            guard let destination = destinationBytes.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return
+            }
+            for row in 0..<height {
+                let sourceRow = source.advanced(by: row * bytesPerRow)
+                let destinationRow = destination.advanced(by: row * width * 3)
+                for column in 0..<width {
+                    let sourcePixel = sourceRow.advanced(by: column * 4)
+                    let destinationPixel = destinationRow.advanced(by: column * 3)
+                    destinationPixel[0] = sourcePixel[0]
+                    destinationPixel[1] = sourcePixel[1]
+                    destinationPixel[2] = sourcePixel[2]
+                }
+            }
+        }
+        return ImageBuffer(width: width, height: height, bgr: bgr)
+    }
+
     static func cgImageToBGRBuffer(_ image: CGImage) -> ImageBuffer? {
         let width = image.width
         let height = image.height
         guard width > 0, height > 0 else { return nil }
-        
+
         var bgra = [UInt8](repeating: 0, count: width * height * 4)
         guard let context = CGContext(
             data: &bgra,
@@ -336,6 +377,28 @@ enum ColorDetector {
             return "未检测到玩家黄点，候选数=\(candidateCount)"
         }
     }
+
+    struct OtherPlayerMarkerDetectionResult: Sendable {
+        let points: [CGPoint]
+        let candidateCount: Int
+
+        var summary: String {
+            points.isEmpty
+                ? "未检测到其他玩家红点"
+                : "检测到其他玩家红点 \(points.count) 个"
+        }
+    }
+
+    struct TeammateMarkerDetectionResult: Sendable {
+        let points: [CGPoint]
+        let candidateCount: Int
+
+        var summary: String {
+            points.isEmpty
+                ? "未检测到队友橙点"
+                : "检测到队友橙点 \(points.count) 个"
+        }
+    }
     
     struct DarkRegionDetectionResult: Sendable {
         let rect: CGRect?
@@ -357,6 +420,14 @@ enum ColorDetector {
             return "未找到深色连通区域；候选数=\(candidateCount)"
         }
     }
+
+    struct MinimapContentValidationResult: Sendable {
+        let isValid: Bool
+        let darkRatio: Double
+        let maximumBrightEdgeRatio: Double
+        let markerPixelCount: Int
+        let summary: String
+    }
     
     static func findYellowCentroid(in image: ImageBuffer, minArea: Int = 5) -> CGPoint? {
         detectPlayerMarker(in: image, minArea: minArea).point
@@ -365,8 +436,36 @@ enum ColorDetector {
     static func detectPlayerMarker(
         in image: ImageBuffer,
         minArea: Int = 2,
-        maxArea: Int = 120
+        maxArea: Int = 120,
+        near preferredPoint: CGPoint? = nil
     ) -> PlayerMarkerDetectionResult {
+        // The player's marker has a near-neon yellow core. Detect that core
+        // first so adjacent gold platforms and decorations cannot merge it into
+        // an oversized warm-colored component. Older maps without this pure
+        // core continue through the broader resampled-yellow fallback below.
+        let vividBlobs = connectedColorBlobs(in: image) { b, g, r in
+            r >= 240
+                && g >= 235
+                && b <= 90
+                && abs(Int(r) - Int(g)) <= 25
+        }
+        let vividCandidates = playerMarkerCandidates(
+            from: vividBlobs,
+            minArea: minArea,
+            maxArea: maxArea
+        )
+        if let best = bestPlayerMarker(
+            in: vividCandidates,
+            near: preferredPoint
+        ) {
+            return PlayerMarkerDetectionResult(
+                point: best.centroid,
+                candidateCount: vividCandidates.count,
+                selectedArea: best.area,
+                selectedSize: CGSize(width: best.width, height: best.height)
+            )
+        }
+
         let blobs = connectedColorBlobs(in: image) { b, g, r in
             // Native Retina pixels matched the strict Windows BGR threshold.
             // A point-resolution ScreenCaptureKit frame is resampled, so accept
@@ -380,7 +479,30 @@ enum ColorDetector {
                 && Int(r) + Int(g) >= Int(b) * 3
         }
         
-        let candidates = blobs.filter {
+        let candidates = playerMarkerCandidates(
+            from: blobs,
+            minArea: minArea,
+            maxArea: maxArea
+        )
+
+        // Prefer the compact player marker over thin yellow UI glyphs or
+        // oversized minimap decorations that can otherwise stay fixed while the
+        // character is moving.
+        let best = bestPlayerMarker(in: candidates, near: preferredPoint)
+        return PlayerMarkerDetectionResult(
+            point: best?.centroid,
+            candidateCount: candidates.count,
+            selectedArea: best?.area,
+            selectedSize: best.map { CGSize(width: $0.width, height: $0.height) }
+        )
+    }
+
+    private static func playerMarkerCandidates(
+        from blobs: [ColorBlob],
+        minArea: Int,
+        maxArea: Int
+    ) -> [ColorBlob] {
+        blobs.filter {
             guard $0.area >= minArea,
                   $0.area <= maxArea,
                   $0.width >= 2,
@@ -395,18 +517,98 @@ enum ColorDetector {
                 && aspect <= 1.9
                 && fillRatio >= 0.45
         }
-        
-        // Prefer the compact player marker over thin yellow UI glyphs or
-        // oversized minimap decorations that can otherwise stay fixed while the
-        // character is moving.
-        let best = candidates.max { lhs, rhs in
-            playerMarkerScore(lhs) < playerMarkerScore(rhs)
+    }
+
+    private static func bestPlayerMarker(
+        in candidates: [ColorBlob],
+        near preferredPoint: CGPoint?
+    ) -> ColorBlob? {
+        candidates.max { lhs, rhs in
+            playerMarkerTrackingScore(lhs, near: preferredPoint)
+                < playerMarkerTrackingScore(rhs, near: preferredPoint)
         }
-        return PlayerMarkerDetectionResult(
-            point: best?.centroid,
-            candidateCount: candidates.count,
-            selectedArea: best?.area,
-            selectedSize: best.map { CGSize(width: $0.width, height: $0.height) }
+    }
+
+    static func detectOtherPlayerMarkers(
+        in image: ImageBuffer,
+        minArea: Int = 2,
+        maxArea: Int = 120
+    ) -> OtherPlayerMarkerDetectionResult {
+        let blobs = connectedColorBlobs(in: image) { b, g, r in
+            let hsv = rgbToOpenCVHSV(r: r, g: g, b: b)
+            let isRedHue = hsv.h <= 12 || hsv.h >= 168
+            return isRedHue
+                && hsv.s >= 90
+                && hsv.v >= 110
+                && r >= 130
+                && Int(r) >= Int(g) + 40
+                && Int(r) >= Int(b) + 40
+        }
+
+        let candidates = blobs.filter {
+            guard $0.area >= minArea,
+                  $0.area <= maxArea,
+                  $0.width >= 2,
+                  $0.height >= 2,
+                  $0.width <= 16,
+                  $0.height <= 16 else { return false }
+            let aspect = Double($0.width) / Double($0.height)
+            let fillRatio = Double($0.area) / Double($0.width * $0.height)
+            return aspect >= 0.5
+                && aspect <= 2.0
+                && fillRatio >= 0.4
+        }.sorted {
+            if $0.centroid.x == $1.centroid.x {
+                return $0.centroid.y < $1.centroid.y
+            }
+            return $0.centroid.x < $1.centroid.x
+        }
+
+        return OtherPlayerMarkerDetectionResult(
+            points: candidates.map(\.centroid),
+            candidateCount: candidates.count
+        )
+    }
+
+    static func detectTeammateMarkers(
+        in image: ImageBuffer,
+        minArea: Int = 2,
+        maxArea: Int = 120
+    ) -> TeammateMarkerDetectionResult {
+        let blobs = connectedColorBlobs(in: image) { b, g, r in
+            let hsv = rgbToOpenCVHSV(r: r, g: g, b: b)
+            return hsv.h > 12
+                && hsv.h < 20
+                && hsv.s >= 90
+                && hsv.v >= 130
+                && r >= 160
+                && g >= 80
+                && Int(r) >= Int(g) + 30
+                && Int(g) >= Int(b) + 30
+        }
+
+        let candidates = blobs.filter {
+            guard $0.area >= minArea,
+                  $0.area <= maxArea,
+                  $0.width >= 2,
+                  $0.height >= 2,
+                  $0.width <= 16,
+                  $0.height <= 16 else { return false }
+            let aspect = Double($0.width) / Double($0.height)
+            let fillRatio = Double($0.area) / Double($0.width * $0.height)
+            return aspect >= 0.5
+                && aspect <= 2.0
+                && fillRatio >= 0.4
+        }.sorted {
+            if $0.centroid.x == $1.centroid.x {
+                return $0.centroid.y < $1.centroid.y
+            }
+            return $0.centroid.x < $1.centroid.x
+        }
+
+        return TeammateMarkerDetectionResult(
+            points: candidates.map(\.centroid),
+            candidateCount: candidates.count
         )
     }
     
@@ -428,9 +630,17 @@ enum ColorDetector {
 
     static func detectMinimapRegion(
         in image: ImageBuffer,
-        searchWidth: Int = 320,
-        searchHeight: Int = 360
+        searchWidth: Int = 480,
+        searchHeight: Int = 420
     ) -> DarkRegionDetectionResult {
+        // The minimap panel is permanently anchored to the top-left of the
+        // game content. Its light frame is considerably more stable than the
+        // artwork inside the map: Time Road, for example, contains large white
+        // buildings and legitimately fails a "mostly dark" content check.
+        //
+        // A frame match already proves both location and geometry, so return it
+        // directly. Re-validating the cropped content by darkness would reject
+        // bright maps and force the very expensive morphology fallback.
         if let frameRegion = detectMinimapByWhiteFrame(
             in: image,
             searchWidth: searchWidth,
@@ -442,14 +652,157 @@ enum ColorDetector {
             in: image,
             searchWidth: searchWidth,
             searchHeight: searchHeight
-        ) {
-            return markerRegion
+        ), let validated = validatedMinimapRegion(markerRegion, in: image) {
+            return validated
         }
-        return detectDarkRegion(
+        let fallback = detectDarkRegion(
             in: image,
-            searchWidth: 480,
-            searchHeight: 360
+            searchWidth: searchWidth,
+            searchHeight: searchHeight
         )
+        if let validated = validatedMinimapRegion(fallback, in: image) {
+            return validated
+        }
+        return DarkRegionDetectionResult(
+            rect: nil,
+            threshold: fallback.threshold,
+            candidateCount: fallback.candidateCount,
+            bestCandidate: fallback.rect ?? fallback.bestCandidate,
+            bestRectangularity: fallback.bestRectangularity
+        )
+    }
+
+    static func validateMinimapContent(in image: ImageBuffer) -> MinimapContentValidationResult {
+        guard image.width >= 70, image.height >= 40 else {
+            return MinimapContentValidationResult(
+                isValid: false,
+                darkRatio: 0,
+                maximumBrightEdgeRatio: 1,
+                markerPixelCount: 0,
+                summary: "内容区尺寸过小（\(image.width)×\(image.height)）"
+            )
+        }
+
+        let aspect = Double(image.width) / Double(max(image.height, 1))
+        let darkRatio = darkPixelRatio(
+            in: image,
+            minX: 0,
+            minY: 0,
+            maxX: image.width - 1,
+            maxY: image.height - 1
+        )
+        let edgeRatios = [
+            brightPixelRatio(in: image, minX: 0, minY: 0, maxX: image.width - 1, maxY: min(1, image.height - 1)),
+            brightPixelRatio(in: image, minX: 0, minY: max(0, image.height - 2), maxX: image.width - 1, maxY: image.height - 1),
+            brightPixelRatio(in: image, minX: 0, minY: 0, maxX: min(1, image.width - 1), maxY: image.height - 1),
+            brightPixelRatio(in: image, minX: max(0, image.width - 2), minY: 0, maxX: image.width - 1, maxY: image.height - 1),
+        ]
+        let maximumBrightEdgeRatio = edgeRatios.max() ?? 1
+        let markerPixelCount = countMinimapMarkerPixels(
+            in: image,
+            minX: 0,
+            minY: 0,
+            maxX: image.width - 1,
+            maxY: image.height - 1
+        )
+        let isValid = aspect >= 0.5
+            && aspect <= 4.0
+            && darkRatio >= 0.12
+            && maximumBrightEdgeRatio < 0.25
+            && markerPixelCount >= 3
+        let summary = "暗色占比=\(String(format: "%.2f", darkRatio))，边缘亮色=\(String(format: "%.2f", maximumBrightEdgeRatio))，标记像素=\(markerPixelCount)"
+        return MinimapContentValidationResult(
+            isValid: isValid,
+            darkRatio: darkRatio,
+            maximumBrightEdgeRatio: maximumBrightEdgeRatio,
+            markerPixelCount: markerPixelCount,
+            summary: summary
+        )
+    }
+
+    private static func validatedMinimapRegion(
+        _ result: DarkRegionDetectionResult,
+        in image: ImageBuffer
+    ) -> DarkRegionDetectionResult? {
+        guard let originalRect = result.rect,
+              let refinedRect = trimBrightFrameEdges(in: image, rect: originalRect),
+              let content = image.cropped(
+                x: Int(refinedRect.minX),
+                y: Int(refinedRect.minY),
+                width: Int(refinedRect.width),
+                height: Int(refinedRect.height)
+              ) else { return nil }
+        let validation = validateMinimapContent(in: content)
+        guard validation.isValid else { return nil }
+        return DarkRegionDetectionResult(
+            rect: refinedRect,
+            threshold: result.threshold,
+            candidateCount: result.candidateCount,
+            bestCandidate: refinedRect,
+            bestRectangularity: result.bestRectangularity
+        )
+    }
+
+    private static func trimBrightFrameEdges(in image: ImageBuffer, rect: CGRect) -> CGRect? {
+        var left = max(0, Int(rect.minX))
+        var top = max(0, Int(rect.minY))
+        var right = min(image.width - 1, Int(rect.maxX) - 1)
+        var bottom = min(image.height - 1, Int(rect.maxY) - 1)
+        guard right >= left, bottom >= top else { return nil }
+
+        for _ in 0..<12 {
+            var changed = false
+            if right - left + 1 > 70,
+               brightPixelRatio(
+                   in: image,
+                   minX: left,
+                   minY: top,
+                   maxX: left,
+                   maxY: bottom
+               ) >= 0.35 {
+                left += 1
+                changed = true
+            }
+            if right - left + 1 > 70,
+               brightPixelRatio(
+                   in: image,
+                   minX: right,
+                   minY: top,
+                   maxX: right,
+                   maxY: bottom
+               ) >= 0.35 {
+                right -= 1
+                changed = true
+            }
+            if bottom - top + 1 > 40,
+               brightPixelRatio(
+                   in: image,
+                   minX: left,
+                   minY: top,
+                   maxX: right,
+                   maxY: top
+               ) >= 0.35 {
+                top += 1
+                changed = true
+            }
+            if bottom - top + 1 > 40,
+               brightPixelRatio(
+                   in: image,
+                   minX: left,
+                   minY: bottom,
+                   maxX: right,
+                   maxY: bottom
+               ) >= 0.35 {
+                bottom -= 1
+                changed = true
+            }
+            if !changed { break }
+        }
+
+        let width = right - left + 1
+        let height = bottom - top + 1
+        guard width >= 70, height >= 40 else { return nil }
+        return CGRect(x: left, y: top, width: width, height: height)
     }
 
     private struct BrightRun {
@@ -465,73 +818,87 @@ enum ColorDetector {
         searchWidth: Int,
         searchHeight: Int
     ) -> DarkRegionDetectionResult? {
-        let sw = min(searchWidth, image.width)
-        let sh = min(searchHeight, image.height)
+        // ScreenCaptureKit captures the game content without the macOS title
+        // bar. The panel therefore begins within a few pixels of (0, 0).
+        // Grow the search box for wide windows because the game scales this
+        // entire UI panel with window width.
+        let dynamicSearchSize = min(640, max(searchWidth, image.width / 4))
+        let sw = min(dynamicSearchSize, image.width)
+        let sh = min(
+            max(searchHeight, dynamicSearchSize),
+            image.height
+        )
         guard let region = image.cropped(x: 0, y: 0, width: sw, height: sh) else { return nil }
 
         let runs = brightHorizontalRuns(in: region).filter {
-            $0.width >= 90 && $0.width <= 300 && $0.startX <= 45
+            $0.width >= 100 && $0.width <= 560 && $0.startX <= 24
         }
         var bestRect: CGRect?
         var bestScore = -Double.infinity
         var candidateCount = 0
+        // Depending on the ScreenCaptureKit/window-server path, the captured
+        // frame may retain the macOS title bar. Keep the panel anchored to the
+        // upper-left while allowing that 25–50 point vertical offset.
+        let maximumFrameTop = min(64, max(24, region.height / 12))
 
         for topIndex in runs.indices {
+            if Task.isCancelled { return nil }
             let top = runs[topIndex]
+            guard top.y <= maximumFrameTop else { continue }
             for bottomIndex in runs.indices.dropFirst(topIndex + 1) {
+                if Task.isCancelled { return nil }
                 let bottom = runs[bottomIndex]
                 let height = bottom.y - top.y + 1
-                if height > 230 { break }
-                guard height >= 70, height <= 230 else { continue }
+                if height > 600 { break }
+                guard height >= 110 else { continue }
 
-                let left = max(0, min(top.startX, bottom.startX))
-                let right = min(region.width - 1, max(top.endX, bottom.endX))
+                // Use the overlap of the two horizontal frame rows. Nearby
+                // bright game artwork can extend either row, while the actual
+                // panel width remains their common span.
+                let left = max(top.startX, bottom.startX)
+                let right = min(top.endX, bottom.endX)
                 let width = right - left + 1
-                guard width >= 90, width <= 300, left <= 35 else { continue }
+                guard width >= 100, width <= 560, left <= 18 else { continue }
 
-                let overlapLeft = max(top.startX, bottom.startX)
-                let overlapRight = min(top.endX, bottom.endX)
-                guard overlapRight - overlapLeft + 1 >= max(80, width / 2) else { continue }
+                // Ordinary windows keep the panel near one sixth of the
+                // content width. Short, ultra-wide windows instead scale the
+                // UI from the available height, making the panel less than one
+                // tenth of the content width. Accept either stable scale model.
+                let widthToWindowWidth = Double(width) / Double(max(image.width, 1))
+                let widthToWindowHeight = Double(width) / Double(max(image.height, 1))
+                let matchesOrdinaryWidthScale =
+                    widthToWindowWidth >= 0.14 && widthToWindowWidth <= 0.21
+                let matchesUltraWideHeightScale =
+                    widthToWindowHeight >= 0.22 && widthToWindowHeight <= 0.38
+                guard matchesOrdinaryWidthScale || matchesUltraWideHeightScale else {
+                    continue
+                }
+
+                // Across supported resolutions the panel is slightly taller
+                // than it is wide. This excludes chat bars and long platform
+                // edges which may also be light and touch the left side.
+                let panelAspect = Double(height) / Double(width)
+                guard panelAspect >= 1.02, panelAspect <= 1.28 else { continue }
 
                 let leftSide = brightVerticalSupport(in: region, x: left, y1: top.y, y2: bottom.y)
                 let rightSide = brightVerticalSupport(in: region, x: right, y1: top.y, y2: bottom.y)
-                let requiredSideSupport = max(18, height / 6)
-                guard leftSide >= requiredSideSupport || rightSide >= requiredSideSupport else { continue }
-
-                let frameDarkRatio = darkPixelRatio(
-                    in: region,
-                    minX: left,
-                    minY: top.y,
-                    maxX: right,
-                    maxY: bottom.y
-                )
-                guard frameDarkRatio >= 0.18 else { continue }
-                guard let contentRect = minimapContentRect(
-                    in: region,
-                    frameLeft: left,
-                    frameTop: top.y,
-                    frameRight: right,
-                    frameBottom: bottom.y
-                ) else { continue }
-
-                let contentLeft = Int(contentRect.minX)
-                let contentTop = Int(contentRect.minY)
-                let contentRight = Int(contentRect.maxX) - 1
-                let contentBottom = Int(contentRect.maxY) - 1
-                let markerCount = countMinimapMarkerPixels(
-                    in: region,
-                    minX: contentLeft,
-                    minY: contentTop,
-                    maxX: contentRight,
-                    maxY: contentBottom
-                )
+                let requiredSideSupport = Int(Double(height) * 0.62)
+                guard leftSide >= requiredSideSupport,
+                      rightSide >= requiredSideSupport,
+                      let contentRect = minimapContentRect(fromPanelFrame: CGRect(
+                          x: left,
+                          y: top.y,
+                          width: width,
+                          height: height
+                      )) else { continue }
                 candidateCount += 1
 
-                let contentArea = Int(contentRect.width * contentRect.height)
-                let score = Double(contentArea)
-                    + Double(markerCount * 120)
-                    + frameDarkRatio * 1_000
-                    - Double(top.y + left) * 2
+                let sideSupport = Double(leftSide + rightSide) / Double(height * 2)
+                let expectedAspectPenalty = abs(panelAspect - 1.13)
+                let score = sideSupport * 10_000
+                    + Double(width * height) * 0.02
+                    - expectedAspectPenalty * 2_000
+                    - Double(top.y + left) * 120
 
                 if score > bestScore {
                     bestScore = score
@@ -549,6 +916,90 @@ enum ColorDetector {
             bestRectangularity: bestScore
         )
     }
+
+    static func minimapWhiteFrameDiagnostics(
+        in image: ImageBuffer,
+        searchWidth: Int = 480,
+        searchHeight: Int = 420
+    ) -> String {
+        let dynamicSearchSize = min(640, max(searchWidth, image.width / 4))
+        let sw = min(dynamicSearchSize, image.width)
+        let sh = min(max(searchHeight, dynamicSearchSize), image.height)
+        guard let region = image.cropped(x: 0, y: 0, width: sw, height: sh) else {
+            return "白框诊断：截图裁剪失败"
+        }
+
+        let runs = brightHorizontalRuns(in: region).filter {
+            $0.width >= 100 && $0.width <= 560 && $0.startX <= 24
+        }
+        let maximumFrameTop = min(64, max(24, region.height / 12))
+        let topRuns = runs.filter { $0.y <= maximumFrameTop }
+        var geometryCount = 0
+        var maximumSideRatio = 0.0
+
+        for top in topRuns {
+            for bottom in runs where bottom.y > top.y {
+                let height = bottom.y - top.y + 1
+                guard height >= 110, height <= 600 else { continue }
+                let left = max(top.startX, bottom.startX)
+                let right = min(top.endX, bottom.endX)
+                let width = right - left + 1
+                guard width >= 100, width <= 560, left <= 18 else { continue }
+                let widthToWindowWidth = Double(width) / Double(max(image.width, 1))
+                let widthToWindowHeight = Double(width) / Double(max(image.height, 1))
+                let scaleMatches =
+                    (widthToWindowWidth >= 0.14 && widthToWindowWidth <= 0.21)
+                    || (widthToWindowHeight >= 0.22 && widthToWindowHeight <= 0.38)
+                let panelAspect = Double(height) / Double(width)
+                guard scaleMatches, panelAspect >= 1.02, panelAspect <= 1.28 else {
+                    continue
+                }
+                geometryCount += 1
+                let leftSide = brightVerticalSupport(
+                    in: region,
+                    x: left,
+                    y1: top.y,
+                    y2: bottom.y
+                )
+                let rightSide = brightVerticalSupport(
+                    in: region,
+                    x: right,
+                    y1: top.y,
+                    y2: bottom.y
+                )
+                let sideRatio = Double(min(leftSide, rightSide)) / Double(height)
+                maximumSideRatio = max(maximumSideRatio, sideRatio)
+            }
+        }
+
+        let topDescription = topRuns.prefix(3).map {
+            "y=\($0.y),x=\($0.startX)-\($0.endX)"
+        }.joined(separator: ";")
+        return "白框诊断：横线=\(runs.count)，顶边=[\(topDescription)]，几何候选=\(geometryCount)，双侧支持=\(String(format: "%.2f", maximumSideRatio))"
+    }
+
+    private static func minimapContentRect(fromPanelFrame frame: CGRect) -> CGRect? {
+        let panelWidth = Int(frame.width)
+        let panelHeight = Int(frame.height)
+        guard panelWidth >= 100, panelHeight >= 110 else { return nil }
+
+        // The title/map-name block occupies the upper third of the panel.
+        // These proportions were verified across full-screen, 16:9 and wide
+        // window captures; the game scales the complete panel uniformly.
+        let horizontalInset = max(3, Int((Double(panelWidth) * 0.018).rounded()))
+        let contentTopInset = Int((Double(panelHeight) * 0.335).rounded())
+        let contentBottomInset = max(5, Int((Double(panelHeight) * 0.052).rounded()))
+        let contentWidth = panelWidth - horizontalInset * 2
+        let contentHeight = panelHeight - contentTopInset - contentBottomInset
+        guard contentWidth >= 70, contentHeight >= 45 else { return nil }
+
+        return CGRect(
+            x: Int(frame.minX) + horizontalInset,
+            y: Int(frame.minY) + contentTopInset,
+            width: contentWidth,
+            height: contentHeight
+        )
+    }
     
     static func autoDetectDarkRegion(
         in image: ImageBuffer,
@@ -556,8 +1007,8 @@ enum ColorDetector {
         searchHeight: Int = 360,
         darkThreshold: Int = 100,
         minArea: Int = 2_000,
-        maxCandidateWidth: Int = 240,
-        maxCandidateHeight: Int = 220
+        maxCandidateWidth: Int = 420,
+        maxCandidateHeight: Int = 320
     ) -> CGRect? {
         detectDarkRegion(
             in: image,
@@ -576,8 +1027,8 @@ enum ColorDetector {
         searchHeight: Int = 360,
         thresholds: [Int] = [100, 120, 140],
         minArea: Int = 2_000,
-        maxCandidateWidth: Int = 240,
-        maxCandidateHeight: Int = 220
+        maxCandidateWidth: Int = 420,
+        maxCandidateHeight: Int = 320
     ) -> DarkRegionDetectionResult {
         let sw = min(searchWidth, image.width)
         let sh = min(searchHeight, image.height)
@@ -762,9 +1213,11 @@ enum ColorDetector {
         var totalCandidateCount = 0
 
         for threshold in [60, 80, 100, 120, 140] {
+            if Task.isCancelled { return nil }
             let components = rawDarkComponents(in: region, darkThreshold: threshold)
             totalCandidateCount += components.count
             for component in components {
+                if Task.isCancelled { return nil }
                 let w = component.maxX - component.minX + 1
                 let h = component.maxY - component.minY + 1
                 let rectArea = w * h
@@ -1054,6 +1507,29 @@ enum ColorDetector {
         return Double(dark) / Double(total)
     }
 
+    private static func brightPixelRatio(
+        in image: ImageBuffer,
+        minX: Int,
+        minY: Int,
+        maxX: Int,
+        maxY: Int
+    ) -> Double {
+        guard minX <= maxX, minY <= maxY else { return 1 }
+        var bright = 0
+        var total = 0
+        for y in minY...maxY {
+            for x in minX...maxX {
+                guard let pixel = image.pixelBGR(x: x, y: y) else { continue }
+                if isBrightFramePixel(pixel) {
+                    bright += 1
+                }
+                total += 1
+            }
+        }
+        guard total > 0 else { return 1 }
+        return Double(bright) / Double(total)
+    }
+
     private static func countMinimapMarkerPixels(
         in image: ImageBuffer,
         minX: Int,
@@ -1175,6 +1651,19 @@ enum ColorDetector {
         let squarePenalty = abs(log(aspect))
         let sizePenalty = abs(Double(blob.area) - 24) / 24
         return fillRatio * 8 + Double(blob.area) / 20 - squarePenalty * 3 - sizePenalty
+    }
+
+    private static func playerMarkerTrackingScore(
+        _ blob: ColorBlob,
+        near preferredPoint: CGPoint?
+    ) -> Double {
+        let appearanceScore = playerMarkerScore(blob)
+        guard let preferredPoint else { return appearanceScore }
+        let distance = hypot(
+            blob.centroid.x - preferredPoint.x,
+            blob.centroid.y - preferredPoint.y
+        )
+        return appearanceScore - min(distance, 200) * 0.18
     }
     
     private static func connectedColorBlobs(

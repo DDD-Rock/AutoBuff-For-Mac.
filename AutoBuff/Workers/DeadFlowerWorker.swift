@@ -115,9 +115,11 @@ final class DeadFlowerWorker: ObservableObject {
                 }
                 await sleep(0.3)
                 
-                let inMarket = (try? await marketDetector.isInMarket()) ?? false
-                let inMonsterMap = inMarket ? false : ((try? await marketDetector.isInMonsterMap()) ?? false)
-                log("状态检测: 市场=\(inMarket), 怪物地图=\(inMonsterMap)")
+                let location = try? await marketDetector.detectLocation()
+                let inMarket = location?.state == .market
+                let inMonsterMap = location?.state == .monsterMap
+                let evidence = location?.debugSummary ?? "检测失败"
+                log("状态检测: 市场=\(inMarket), 怪物地图=\(inMonsterMap)（\(evidence)）")
                 
                 var didCast = false
                 if inMonsterMap {
@@ -191,7 +193,7 @@ final class DeadFlowerWorker: ObservableObject {
                 
                 let wait = minWait(nextCast)
                 if settings.sitChairEnabled && !isSitting && wait > 5,
-                   (try? await marketDetector.isInMarket()) == true {
+                   (try? await marketDetector.detectLocation().state) == .market {
                     do {
                         try await human.pressNamedKey(settings.chairKey)
                         isSitting = true
@@ -224,7 +226,7 @@ final class DeadFlowerWorker: ObservableObject {
             return false
         }
 
-        log("检测到弹窗，自动点击确定")
+        log("检测到弹窗，自动点击确定（\(dialogDetector.lastDetectionSummary)）")
         for attempt in 1...2 where isRunning && !Task.isCancelled {
             guard await ensureGameFocus(windowID: windowID, reason: "关闭弹窗") else {
                 log("❌ 关闭弹窗前无法确认游戏窗口焦点")
@@ -445,7 +447,7 @@ final class DeadFlowerWorker: ObservableObject {
         log("等待传送...")
         await sleep(blackScreenWait)
         for _ in 0..<8 where isRunning {
-            if (try? await marketDetector.isInMonsterMap()) == true {
+            if (try? await marketDetector.detectLocation().state) == .monsterMap {
                 log("✅ 已离开市场")
                 return true
             }
@@ -515,7 +517,7 @@ final class DeadFlowerWorker: ObservableObject {
         log("等待传送...")
         await sleep(blackScreenWait)
         for _ in 0..<8 where isRunning {
-            if (try? await marketDetector.isInMarket()) == true {
+            if (try? await marketDetector.detectLocation().state) == .market {
                 log("✅ 已回到市场")
                 return true
             }

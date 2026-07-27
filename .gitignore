@@ -3,6 +3,7 @@ build/
 build.log
 .derivedData/
 DerivedData/
+.build-agent/
 *.xcuserstate
 *.xcbkptlist
 xcuserdata/
@@ -18,6 +19,7 @@ Package.resolved
 .LSOverride
 
 # App packaging
+*.app/
 *.ipa
 *.dSYM.zip
 *.dSYM

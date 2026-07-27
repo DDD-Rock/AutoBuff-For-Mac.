@@ -20,6 +20,13 @@ struct PortalMarkerView: View {
     @State private var detectedRegion: CGRect?
     @State private var statusText = "加载中..."
     @State private var isLoading = true
+    @State private var loadRequestID = UUID()
+    @State private var gameBuffer: ImageBuffer?
+    @State private var gameImage: NSImage?
+    @State private var gameSize: CGSize = .zero
+    @State private var selectedSearchRegion: CGRect?
+    @State private var selectionStart: CGPoint?
+    @State private var automaticDetectionTask: Task<ColorDetector.DarkRegionDetectionResult, Never>?
     
     var body: some View {
         VStack(spacing: 12) {
@@ -57,6 +64,51 @@ struct PortalMarkerView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(AppTheme.border)
                     }
+            } else if let image = gameImage {
+                VStack(spacing: 7) {
+                    Text("在游戏画面中拖动圈选小地图的大致范围")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(
+                            width: gamePreviewSize.width,
+                            height: gamePreviewSize.height
+                        )
+                        .overlay {
+                            Canvas { context, _ in
+                                guard let selectedSearchRegion else { return }
+                                let previewRect = CGRect(
+                                    x: selectedSearchRegion.minX * gamePreviewScale,
+                                    y: selectedSearchRegion.minY * gamePreviewScale,
+                                    width: selectedSearchRegion.width * gamePreviewScale,
+                                    height: selectedSearchRegion.height * gamePreviewScale
+                                )
+                                context.fill(
+                                    Path(previewRect),
+                                    with: .color(AppTheme.accent.opacity(0.14))
+                                )
+                                context.stroke(
+                                    Path(previewRect),
+                                    with: .color(AppTheme.accent),
+                                    lineWidth: 2
+                                )
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .gesture(rangeSelectionGesture)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(AppTheme.border)
+                        }
+
+                    Text("请沿小地图内容边缘框选，不要包含标题栏")
+                        .font(.system(size: 10))
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
             } else if isLoading {
                 ProgressView()
                     .frame(width: 420, height: 240)
@@ -71,6 +123,9 @@ struct PortalMarkerView: View {
                         .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
                         .multilineTextAlignment(.center)
+                    Button("重试") {
+                        Task { await loadMinimap() }
+                    }
                 }
                 .frame(width: 420, height: 240)
                 .background(AppTheme.panel)
@@ -97,6 +152,10 @@ struct PortalMarkerView: View {
         .padding()
         .frame(width: 480, height: 520)
         .task { await loadMinimap() }
+        .onDisappear {
+            automaticDetectionTask?.cancel()
+            automaticDetectionTask = nil
+        }
     }
 
     private var previewScale: CGFloat {
@@ -112,39 +171,192 @@ struct PortalMarkerView: View {
     private var previewSize: CGSize {
         CGSize(width: regionSize.width * previewScale, height: regionSize.height * previewScale)
     }
+
+    private var gamePreviewScale: CGFloat {
+        guard gameSize.width > 0, gameSize.height > 0 else { return 1 }
+        return min(420 / gameSize.width, 300 / gameSize.height)
+    }
+
+    private var gamePreviewSize: CGSize {
+        CGSize(
+            width: gameSize.width * gamePreviewScale,
+            height: gameSize.height * gamePreviewScale
+        )
+    }
+
+    private var rangeSelectionGesture: some Gesture {
+        DragGesture(minimumDistance: 3)
+            .onChanged { value in
+                let current = imagePoint(from: value.location)
+                if selectionStart == nil {
+                    selectionStart = imagePoint(from: value.startLocation)
+                }
+                guard let selectionStart else { return }
+                selectedSearchRegion = normalizedSelection(
+                    from: selectionStart,
+                    to: current
+                )
+            }
+            .onEnded { value in
+                let start = selectionStart ?? imagePoint(from: value.startLocation)
+                let region = normalizedSelection(
+                    from: start,
+                    to: imagePoint(from: value.location)
+                )
+                selectionStart = nil
+                guard region.width >= 40, region.height >= 30 else {
+                    statusText = "圈选范围太小，请重新拖动选择。"
+                    return
+                }
+                selectedSearchRegion = region
+                Task { await recognizeSelectedRange(region) }
+            }
+    }
     
     private func scaled(_ point: CGPoint, in size: CGSize) -> CGPoint {
         guard regionSize.width > 0, regionSize.height > 0 else { return point }
         return CGPoint(x: point.x / regionSize.width * size.width, y: point.y / regionSize.height * size.height)
     }
+
+    private func imagePoint(from previewPoint: CGPoint) -> CGPoint {
+        guard gamePreviewScale > 0 else { return .zero }
+        return CGPoint(
+            x: min(max(0, previewPoint.x / gamePreviewScale), gameSize.width),
+            y: min(max(0, previewPoint.y / gamePreviewScale), gameSize.height)
+        )
+    }
+
+    private func normalizedSelection(from start: CGPoint, to end: CGPoint) -> CGRect {
+        CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
+        ).integral
+    }
     
     private func loadMinimap() async {
+        automaticDetectionTask?.cancel()
+        automaticDetectionTask = nil
+        let requestID = UUID()
+        loadRequestID = requestID
         isLoading = true
-        defer { isLoading = false }
+        statusText = "正在读取游戏窗口..."
+        minimapImage = nil
+        detectedRegion = nil
+        gameBuffer = nil
+        gameImage = nil
+        gameSize = .zero
+        selectedSearchRegion = nil
+
+        let slowLoadingTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled,
+                  loadRequestID == requestID,
+                  isLoading else { return }
+            statusText = "仍在识别小地图，请稍候..."
+        }
+        let timeoutTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled,
+                  loadRequestID == requestID,
+                  isLoading else { return }
+            automaticDetectionTask?.cancel()
+            automaticDetectionTask = nil
+            statusText = "加载超时，请确认游戏窗口仍在屏幕上并重试。"
+            isLoading = false
+        }
+        defer {
+            slowLoadingTask.cancel()
+            timeoutTask.cancel()
+        }
+
         let monitor = MinimapMonitor()
         monitor.setWindow(windowID)
         do {
-            guard let region = try await monitor.autoDetectDarkRegion() else {
-                statusText = "未识别到小地图：\(monitor.lastDetectionSummary)"
-                minimapImage = nil
-                regionSize = .zero
-                detectedRegion = nil
+            let captured = try await monitor.captureGameScreen()
+            guard loadRequestID == requestID, isLoading else { return }
+            gameBuffer = captured
+            gameImage = captured.toPreviewImage()
+            gameSize = CGSize(width: captured.width, height: captured.height)
+            statusText = "正在自动识别；也可以直接在画面中拖动圈选。"
+
+            let detectionTask = Task.detached(priority: .userInitiated) {
+                ColorDetector.detectMinimapRegion(in: captured)
+            }
+            automaticDetectionTask = detectionTask
+            let result = await detectionTask.value
+            if loadRequestID == requestID {
+                automaticDetectionTask = nil
+            }
+            guard loadRequestID == requestID, isLoading else { return }
+            guard let region = result.rect else {
+                statusText = "自动识别失败，请在画面中拖动圈选小地图范围。"
+                isLoading = false
                 return
             }
-            detectedRegion = region
-            let buffer = try await monitor.captureMinimap()
-            regionSize = CGSize(width: buffer.width, height: buffer.height)
-            minimapImage = buffer.toPreviewImage()
-            if showAutoPortal {
-                autoPortal = try await monitor.findBluePortal(leftmost: true)
-            }
-            if let existingX, let existingY {
-                manualPoint = CGPoint(x: existingX, y: existingY)
-            }
-            statusText = loadedStatusText
+            try await applyDetectedRegion(region, in: captured, requestID: requestID)
         } catch {
+            guard loadRequestID == requestID, isLoading else { return }
             statusText = "加载失败: \(error.localizedDescription)"
+            isLoading = false
         }
+    }
+
+    private func recognizeSelectedRange(_ searchRegion: CGRect) async {
+        guard let gameBuffer else { return }
+        automaticDetectionTask?.cancel()
+        automaticDetectionTask = nil
+        let requestID = UUID()
+        loadRequestID = requestID
+        isLoading = true
+        statusText = "正在使用所选小地图范围..."
+        do {
+            try await applyDetectedRegion(
+                searchRegion,
+                in: gameBuffer,
+                requestID: requestID
+            )
+        } catch {
+            guard loadRequestID == requestID, isLoading else { return }
+            statusText = "所选范围加载失败: \(error.localizedDescription)"
+            isLoading = false
+        }
+    }
+
+    private func applyDetectedRegion(
+        _ region: CGRect,
+        in source: ImageBuffer,
+        requestID: UUID
+    ) async throws {
+        let x = max(0, Int(region.minX))
+        let y = max(0, Int(region.minY))
+        let width = min(Int(region.width), source.width - x)
+        let height = min(Int(region.height), source.height - y)
+        guard let buffer = source.cropped(
+            x: x,
+            y: y,
+            width: width,
+            height: height
+        ) else {
+            throw GameCaptureError.noImage
+        }
+        guard loadRequestID == requestID, isLoading else { return }
+
+        detectedRegion = CGRect(x: x, y: y, width: width, height: height)
+        regionSize = CGSize(width: buffer.width, height: buffer.height)
+        minimapImage = buffer.toPreviewImage()
+        if showAutoPortal {
+            autoPortal = await Task.detached(priority: .userInitiated) {
+                ColorDetector.findBluePortal(in: buffer, leftmost: true)
+            }.value
+        }
+        guard loadRequestID == requestID, isLoading else { return }
+        if let existingX, let existingY {
+            manualPoint = CGPoint(x: existingX, y: existingY)
+        }
+        statusText = loadedStatusText
+        isLoading = false
     }
 }
 

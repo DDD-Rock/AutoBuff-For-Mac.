@@ -5,12 +5,28 @@ enum AppMode: String, Codable, CaseIterable {
     case deadFlower = "dead"
     case liveFlower = "live"
     case followHeal = "follow_heal"
+    case monitor
 
     var title: String {
         switch self {
         case .deadFlower: return "死花模式"
         case .liveFlower: return "活花模式"
         case .followHeal: return "跟补模式"
+        case .monitor: return "监控模式"
+        }
+    }
+}
+
+enum MonitorDisplayMode: String, Codable, CaseIterable {
+    case minimapOnly = "minimap_only"
+    case minimapWithAnnotations = "minimap_with_annotations"
+    case annotationsOnly = "annotations_only"
+
+    var title: String {
+        switch self {
+        case .minimapOnly: return "纯小地图"
+        case .minimapWithAnnotations: return "小地图 + 标注"
+        case .annotationsOnly: return "纯标注"
         }
     }
 }
@@ -44,6 +60,9 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
+    static let currentSchemaVersion = 2
+
+    var schemaVersion: Int = currentSchemaVersion
     var mode: AppMode = .deadFlower
     var returnToMarket: Bool = true
     var jumpKey: String = "Alt"
@@ -65,6 +84,10 @@ struct AppSettings: Codable, Equatable {
     var preSkillMoveMode: PreSkillMoveMode = .rightOnly
     var manualPortalX: Int? = nil
     var manualPortalY: Int? = nil
+    var mapTopologies: [MapTopology] = []
+    var monitorDisplayMode: MonitorDisplayMode = .minimapWithAnnotations
+    var monitorServerBaseURL: String = "http://106.52.208.129:28671"
+    var monitorAccountUsername: String = ""
     var buffs: [BuffConfig]
 
     static var `default`: AppSettings {
@@ -77,6 +100,7 @@ struct AppSettings: Codable, Equatable {
 
 extension AppSettings {
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case mode
         case returnToMarket
         case jumpKey
@@ -98,11 +122,17 @@ extension AppSettings {
         case preSkillMoveMode
         case manualPortalX
         case manualPortalY
+        case mapTopology
+        case mapTopologies
+        case monitorDisplayMode
+        case monitorServerBaseURL
+        case monitorAccountUsername
         case buffs
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         let returnToMarket = try container.decodeIfPresent(Bool.self, forKey: .returnToMarket) ?? true
         self.mode = try container.decodeIfPresent(AppMode.self, forKey: .mode)
             ?? (returnToMarket ? .deadFlower : .liveFlower)
@@ -126,11 +156,27 @@ extension AppSettings {
         self.preSkillMoveMode = try container.decodeIfPresent(PreSkillMoveMode.self, forKey: .preSkillMoveMode) ?? .rightOnly
         self.manualPortalX = try container.decodeIfPresent(Int.self, forKey: .manualPortalX)
         self.manualPortalY = try container.decodeIfPresent(Int.self, forKey: .manualPortalY)
+        self.mapTopologies = try container.decodeIfPresent([MapTopology].self, forKey: .mapTopologies)
+            ?? container.decodeIfPresent(MapTopology.self, forKey: .mapTopology).map { [$0] }
+            ?? []
+        self.monitorDisplayMode = try container.decodeIfPresent(
+            MonitorDisplayMode.self,
+            forKey: .monitorDisplayMode
+        ) ?? .minimapWithAnnotations
+        self.monitorServerBaseURL = try container.decodeIfPresent(
+            String.self,
+            forKey: .monitorServerBaseURL
+        ) ?? "http://106.52.208.129:28671"
+        self.monitorAccountUsername = try container.decodeIfPresent(
+            String.self,
+            forKey: .monitorAccountUsername
+        ) ?? ""
         self.buffs = try container.decodeIfPresent([BuffConfig].self, forKey: .buffs) ?? AppSettings.default.buffs
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(mode, forKey: .mode)
         try container.encode(returnToMarket, forKey: .returnToMarket)
         try container.encode(jumpKey, forKey: .jumpKey)
@@ -152,6 +198,10 @@ extension AppSettings {
         try container.encode(preSkillMoveMode, forKey: .preSkillMoveMode)
         try container.encodeIfPresent(manualPortalX, forKey: .manualPortalX)
         try container.encodeIfPresent(manualPortalY, forKey: .manualPortalY)
+        try container.encode(mapTopologies, forKey: .mapTopologies)
+        try container.encode(monitorDisplayMode, forKey: .monitorDisplayMode)
+        try container.encode(monitorServerBaseURL, forKey: .monitorServerBaseURL)
+        try container.encode(monitorAccountUsername, forKey: .monitorAccountUsername)
         try container.encode(buffs, forKey: .buffs)
     }
 }

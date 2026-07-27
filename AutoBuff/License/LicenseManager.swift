@@ -3,7 +3,8 @@ import Foundation
 import IOKit
 
 enum LicenseManager {
-    private static let activationStorageKey = "autobuff.activationCode"
+    static let activationStorageKey = "autobuff.activationCode.v2"
+    static let legacyActivationStorageKey = "autobuff.activationCode"
     private static let licenseSecret = "wxw752"
     private static let masterActivationCode = "ZHIMAKAIMENYZY"
 
@@ -36,6 +37,7 @@ enum LicenseManager {
 
     static func clearActivation() {
         UserDefaults.standard.removeObject(forKey: activationStorageKey)
+        UserDefaults.standard.removeObject(forKey: legacyActivationStorageKey)
     }
 
     static func normalize(_ value: String) -> String {

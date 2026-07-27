@@ -29,9 +29,22 @@
 		DD93C2452FD445DF004F21CD /* AutoBuffUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutoBuffUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4A5453464558434550540001 /* Exceptions for "AutoBuff" folder in "AutoBuff" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = DD93C2292FD445DE004F21CD /* AutoBuff */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		DD93C22C2FD445DE004F21CD /* AutoBuff */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				4A5453464558434550540001 /* Exceptions for "AutoBuff" folder in "AutoBuff" target */,
+			);
 			path = AutoBuff;
 			sourceTree = "<group>";
 		};
@@ -400,7 +413,8 @@
 				DEVELOPMENT_ASSET_PATHS = "\"AutoBuff/Preview Content\"";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AutoBuff/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -428,7 +442,8 @@
 				DEVELOPMENT_ASSET_PATHS = "\"AutoBuff/Preview Content\"";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AutoBuff/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

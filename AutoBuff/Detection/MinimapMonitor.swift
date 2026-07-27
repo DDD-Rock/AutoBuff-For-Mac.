@@ -7,12 +7,17 @@ final class MinimapMonitor {
     private var windowID: CGWindowID = 0
     private var minimapRegion: CGRect?
     private var windowBounds: CGRect = .zero
+    private var expectedPlayerPoint: CGPoint?
+    private(set) var lastCaptureSize: CGSize = .zero
+    private(set) var lastWhiteFrameDiagnostics = "尚未执行白框诊断"
     private(set) var lastDetectionSummary = "尚未执行小地图检测"
     private(set) var lastPlayerDetectionSummary = "尚未执行玩家黄点检测"
     
     func setWindow(_ windowID: CGWindowID) {
         if self.windowID != windowID {
             minimapRegion = nil
+            expectedPlayerPoint = nil
+            captureService.clearCaptureCache()
         }
         self.windowID = windowID
     }
@@ -24,6 +29,10 @@ final class MinimapMonitor {
     func clearMinimapRegion() {
         minimapRegion = nil
     }
+
+    func setExpectedPlayerPoint(_ point: CGPoint?) {
+        expectedPlayerPoint = point
+    }
     
     var minimapSize: CGSize? {
         guard let region = minimapRegion else { return nil }
@@ -33,9 +42,18 @@ final class MinimapMonitor {
     func autoDetectDarkRegion() async throws -> CGRect? {
         let captured = try await captureService.captureBGR(windowID: windowID)
         windowBounds = captured.windowBounds
-        let result = await Task.detached(priority: .userInitiated, operation: {
-            ColorDetector.detectMinimapRegion(in: captured.buffer)
+        lastCaptureSize = CGSize(
+            width: captured.buffer.width,
+            height: captured.buffer.height
+        )
+        let output = await Task.detached(priority: .userInitiated, operation: {
+            (
+                ColorDetector.detectMinimapRegion(in: captured.buffer),
+                ColorDetector.minimapWhiteFrameDiagnostics(in: captured.buffer)
+            )
         }).value
+        let result = output.0
+        lastWhiteFrameDiagnostics = output.1
         lastDetectionSummary = result.summary
         if let rect = result.rect {
             minimapRegion = rect
@@ -43,7 +61,7 @@ final class MinimapMonitor {
         }
         return nil
     }
-    
+
     func captureMinimap() async throws -> ImageBuffer {
         if minimapRegion == nil {
             _ = try await autoDetectDarkRegion()
@@ -53,13 +71,34 @@ final class MinimapMonitor {
         }
         return try await captureService.captureRegion(windowID: windowID, rect: CGRect(x: 0, y: 0, width: 300, height: 200))
     }
+
+    func startMinimapStream(
+        targetFramesPerSecond: Double
+    ) async throws -> GameRegionCaptureStream {
+        guard let minimapRegion else {
+            throw GameCaptureError.noImage
+        }
+        return try await captureService.startRegionStream(
+            windowID: windowID,
+            rect: minimapRegion,
+            targetFramesPerSecond: targetFramesPerSecond
+        )
+    }
     
-    func findPlayerPosition() async throws -> CGPoint? {
+    func findPlayerPosition(minArea: Int = 2) async throws -> CGPoint? {
         let minimap = try await captureMinimap()
+        let expectedPlayerPoint = self.expectedPlayerPoint
         let result = await Task.detached(priority: .userInitiated, operation: {
-            ColorDetector.detectPlayerMarker(in: minimap)
+            ColorDetector.detectPlayerMarker(
+                in: minimap,
+                minArea: minArea,
+                near: expectedPlayerPoint
+            )
         }).value
         lastPlayerDetectionSummary = result.summary
+        if let point = result.point {
+            self.expectedPlayerPoint = point
+        }
         return result.point
     }
     

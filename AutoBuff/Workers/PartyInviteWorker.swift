@@ -46,7 +46,7 @@ final class PartyInviteWorker: ObservableObject {
     private func run(windowID: CGWindowID, runID currentRunID: UUID) async {
         while isRunning && !Task.isCancelled {
             guard windowSelector.isWindowValid(windowID: windowID) else {
-                onError?("游戏窗口已失效，自动接队已停止")
+                onError?("游戏窗口已失效，自动同意组队已停止")
                 break
             }
 
@@ -73,7 +73,7 @@ final class PartyInviteWorker: ObservableObject {
     private func acceptInvite(at initialPoint: CGPoint, windowID: CGWindowID) async {
         onLog?("检测到队伍邀请，自动同意")
         if !windowSelector.bringWindowToFront(windowID: windowID) {
-            onLog?("⚠️ 无法将游戏窗口置于前台，仍会尝试接队")
+            onLog?("⚠️ 无法将游戏窗口置于前台，仍会尝试同意组队")
         }
         await sleep(0.15)
 

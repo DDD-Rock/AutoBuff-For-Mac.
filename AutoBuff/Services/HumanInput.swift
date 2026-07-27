@@ -4,6 +4,8 @@ import Foundation
 
 actor HumanInput {
     private var currentDirection: Direction?
+    private var pressedNamedKeyCodes: Set<CGKeyCode> = []
+    private var pressedDirectionKeyCodes: Set<CGKeyCode> = []
     private let directionTapDuration: ClosedRange<Int> = 40...120
     private let directionChangeDelay: ClosedRange<Int> = 50...200
     private let portalPressDuration: ClosedRange<Int> = 200...800
@@ -35,6 +37,26 @@ actor HumanInput {
         KeyboardUtils.postKey(code, keyDown: true)
         Thread.sleep(forTimeInterval: duration)
         KeyboardUtils.postKey(code, keyDown: false)
+    }
+
+    func tapDirection(
+        _ direction: Direction,
+        holdMS: ClosedRange<Int>,
+        intervalMS: ClosedRange<Int>
+    ) async {
+        changeDirection(nil)
+        try? await Task.sleep(for: .milliseconds(Int(randomDuration(intervalMS) * 1000)))
+        guard !Task.isCancelled else { return }
+        let code = keyCode(for: direction)
+        KeyboardUtils.postKey(code, keyDown: true)
+        do {
+            try await Task.sleep(for: .milliseconds(Int(randomDuration(holdMS) * 1000)))
+        } catch {
+            KeyboardUtils.postKey(code, keyDown: false)
+            return
+        }
+        KeyboardUtils.postKey(code, keyDown: false)
+        try? await Task.sleep(for: .milliseconds(Int(randomDuration(intervalMS) * 1000)))
     }
     
     func clickAt(screenPoint: CGPoint, offsetRange: Int = 10) {
@@ -93,17 +115,116 @@ actor HumanInput {
             throw KeyboardUtils.InputError.unsupportedKey(key)
         }
         KeyboardUtils.postKey(keyCode, keyDown: true)
+        pressedNamedKeyCodes.insert(keyCode)
         return keyCode
     }
 
     func releaseKey(_ keyCode: CGKeyCode) {
         KeyboardUtils.postKey(keyCode, keyDown: false)
+        pressedNamedKeyCodes.remove(keyCode)
     }
     
     func releaseAll() {
         currentDirection = nil
         for code: CGKeyCode in [0x7B, 0x7C, 0x7D, 0x7E] {
             KeyboardUtils.postKey(code, keyDown: false)
+        }
+        pressedDirectionKeyCodes.removeAll()
+        for code in pressedNamedKeyCodes {
+            KeyboardUtils.postKey(code, keyDown: false)
+        }
+        pressedNamedKeyCodes.removeAll()
+    }
+
+    func performJumpGrabRope(
+        jumpKey: String,
+        direction: Direction,
+        directionLeadMS: Int,
+        upLeadMS: Int,
+        jumpHoldMS: Int,
+        directionReleaseGapMS: Int,
+        upHoldMS: Int
+    ) async throws {
+        releaseAll()
+        pressDirectionRaw(direction)
+        do {
+            try await Task.sleep(for: .milliseconds(directionLeadMS))
+            let jumpCode = try pressNamedKeyDown(jumpKey)
+            try await Task.sleep(for: .milliseconds(upLeadMS))
+            pressDirectionRaw(.up)
+            try await Task.sleep(for: .milliseconds(max(1, jumpHoldMS - upLeadMS)))
+            releaseKey(jumpCode)
+            try await Task.sleep(for: .milliseconds(max(1, directionReleaseGapMS)))
+            releaseDirectionRaw(direction)
+            try await Task.sleep(for: .milliseconds(upHoldMS))
+            releaseDirectionRaw(.up)
+        } catch {
+            releaseAll()
+            throw error
+        }
+    }
+
+    func performRopeDismount(
+        jumpKey: String,
+        direction: Direction,
+        directionLeadMS: Int,
+        jumpHoldMS: Int,
+        directionReleaseGapMS: Int
+    ) async throws {
+        releaseAll()
+        pressDirectionRaw(direction)
+        do {
+            try await Task.sleep(for: .milliseconds(directionLeadMS))
+            let jumpCode = try pressNamedKeyDown(jumpKey)
+            try await Task.sleep(for: .milliseconds(jumpHoldMS))
+            releaseKey(jumpCode)
+            try await Task.sleep(for: .milliseconds(max(1, directionReleaseGapMS)))
+            releaseDirectionRaw(direction)
+        } catch {
+            releaseAll()
+            throw error
+        }
+    }
+
+    func holdDirection(_ direction: Direction) { changeDirection(direction) }
+
+    private func pressDirectionRaw(_ direction: Direction) {
+        let code = keyCode(for: direction)
+        guard !pressedDirectionKeyCodes.contains(code) else { return }
+        KeyboardUtils.postKey(code, keyDown: true)
+        pressedDirectionKeyCodes.insert(code)
+    }
+
+    private func releaseDirectionRaw(_ direction: Direction) {
+        let code = keyCode(for: direction)
+        KeyboardUtils.postKey(code, keyDown: false)
+        pressedDirectionKeyCodes.remove(code)
+    }
+
+    func performDownJump(
+        jumpKey: String,
+        downLeadMS: Int,
+        jumpHoldMS: Int,
+        downReleaseAfterJumpMS: Int
+    ) async throws {
+        changeDirection(.down)
+        do {
+            try await Task.sleep(for: .milliseconds(downLeadMS))
+            let jumpCode = try pressNamedKeyDown(jumpKey)
+            do {
+                let downHoldAfterJump = min(max(1, downReleaseAfterJumpMS), max(1, jumpHoldMS - 1))
+                try await Task.sleep(for: .milliseconds(downHoldAfterJump))
+                changeDirection(nil)
+                try await Task.sleep(for: .milliseconds(max(1, jumpHoldMS - downHoldAfterJump)))
+            } catch {
+                releaseKey(jumpCode)
+                changeDirection(nil)
+                throw error
+            }
+            releaseKey(jumpCode)
+        } catch {
+            changeDirection(nil)
+            throw error
         }
     }
     

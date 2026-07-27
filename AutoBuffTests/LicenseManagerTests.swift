@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AutoBuff
 
@@ -12,5 +13,18 @@ struct LicenseManagerTests {
 
     @Test func masterActivationCodeIsAlwaysValid() {
         #expect(LicenseManager.isValidActivationCode("zhimakaimenyzy"))
+    }
+
+    @Test func legacyActivationStorageDoesNotUnlockCurrentApp() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: LicenseManager.activationStorageKey)
+        defaults.set("ZHIMAKAIMENYZY", forKey: LicenseManager.legacyActivationStorageKey)
+        defer {
+            defaults.removeObject(forKey: LicenseManager.activationStorageKey)
+            defaults.removeObject(forKey: LicenseManager.legacyActivationStorageKey)
+        }
+
+        #expect(LicenseManager.savedActivationCode().isEmpty)
+        #expect(!LicenseManager.isActivated())
     }
 }

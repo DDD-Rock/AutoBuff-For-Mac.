@@ -10,6 +10,8 @@ enum DebugTools {
         let minimap = MinimapMonitor()
         minimap.setWindow(windowID)
         let region = try? await minimap.autoDetectDarkRegion()
+        log("游戏截图尺寸: \(Int(minimap.lastCaptureSize.width))×\(Int(minimap.lastCaptureSize.height))")
+        log(minimap.lastWhiteFrameDiagnostics)
         if let region {
             log("小地图区域: x=\(Int(region.minX)), y=\(Int(region.minY)), w=\(Int(region.width)), h=\(Int(region.height))")
         } else {
@@ -27,8 +29,11 @@ enum DebugTools {
         }
         let market = MarketButtonDetector()
         market.setWindow(windowID)
-        let inMarket = (try? await market.isInMarket()) ?? false
-        log("当前在市场: \(inMarket)")
+        if let location = try? await market.detectLocation() {
+            log("当前在市场: \(location.state == .market)（\(location.debugSummary)）")
+        } else {
+            log("当前在市场: false（状态检测失败）")
+        }
     }
     
     static func testReturnToMarket(windowID: CGWindowID?, log: @MainActor @escaping (String) -> Void) async {
@@ -49,7 +54,7 @@ enum DebugTools {
         let dialog = DialogDetector()
         dialog.setWindow(windowID)
         guard var pos = try? await dialog.findConfirmButtonScreenPoint() else {
-            log("未检测到弹窗")
+            log("未检测到弹窗（\(dialog.lastDetectionSummary)）")
             return
         }
 
@@ -79,24 +84,4 @@ enum DebugTools {
         log("⚠️ 已点击确定，但弹窗仍被检测到")
     }
 
-    static func testPartyInvite(windowID: CGWindowID?, log: @MainActor @escaping (String) -> Void) async {
-        guard let windowID else { log("请先识别游戏窗口"); return }
-        log("调试: 测试队伍邀请检测...")
-        let detector = PartyInviteDetector()
-        detector.setWindow(windowID)
-        guard let pos = try? await detector.findAcceptButtonScreenPoint() else {
-            log("未检测到队伍邀请")
-            return
-        }
-
-        log("队伍邀请同意按钮: \(Int(pos.x)), \(Int(pos.y))，正在点击...")
-        let windowSelector = WindowSelector()
-        let human = HumanInput()
-        if !windowSelector.bringWindowToFront(windowID: windowID) {
-            log("⚠️ 无法将游戏窗口置于前台，仍会尝试点击")
-        }
-        try? await Task.sleep(nanoseconds: 200_000_000)
-        await human.clickAt(screenPoint: pos, offsetRange: 2)
-        log("已点击队伍邀请同意按钮")
-    }
 }
