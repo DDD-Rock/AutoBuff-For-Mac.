@@ -9,6 +9,7 @@ YzY - Auto Buff 是 `open-flower` 的 macOS 原生移植版，用于在 MapleSto
 以下链路已经实现并通过本机编译：
 
 - macOS 14+ SwiftUI 应用
+- 启动时使用监控服务账号登录，不再使用机器码或激活码
 - 游戏窗口自动识别与手动选择
 - 辅助功能、屏幕录制权限检查与引导
 - ScreenCaptureKit 窗口截图

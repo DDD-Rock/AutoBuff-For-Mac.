@@ -432,49 +432,22 @@ struct MonitoringPanelView: View {
                     Text(viewModel.settings.monitorAccountUsername)
                         .font(.system(size: 11, weight: .semibold))
                     Spacer()
-                    Button("复制链接") {
-                        viewModel.copyRemoteMonitorPreviewURL()
+                    Button("打开监控网页") {
+                        viewModel.openRemoteMonitorPage()
                     }
                     .controlSize(.small)
-                    .disabled(viewModel.remoteMonitorPreviewURL.isEmpty)
-                    Button("打开预览") {
-                        viewModel.openRemoteMonitorPreviewURL()
-                    }
-                    .controlSize(.small)
-                    .disabled(viewModel.remoteMonitorPreviewURL.isEmpty)
                     Button("退出") {
                         viewModel.logoutRemoteMonitor()
                     }
                     .controlSize(.small)
                 }
-
-                if !viewModel.remoteMonitorPreviewURL.isEmpty {
-                    Text(viewModel.remoteMonitorPreviewURL)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .lineLimit(1)
-                        .textSelection(.enabled)
-                }
             } else {
                 HStack(spacing: 8) {
-                    TextField("用户名", text: $viewModel.settings.monitorAccountUsername)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 110)
-                    SecureField("密码（至少 8 位）", text: $viewModel.remoteMonitorPassword)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 140)
-                        .onSubmit {
-                            viewModel.loginRemoteMonitor()
-                        }
-                    Button("登录") {
-                        viewModel.loginRemoteMonitor()
-                    }
-                    .controlSize(.small)
-                    .disabled(viewModel.remoteMonitorAuthBusy)
-                    Button("网页注册") {
-                        viewModel.openRemoteMonitorRegistrationPage()
-                    }
-                    .controlSize(.small)
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(viewModel.remoteMonitorAuthStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppTheme.textSecondary)
                 }
             }
 

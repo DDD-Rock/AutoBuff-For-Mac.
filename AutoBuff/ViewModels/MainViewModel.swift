@@ -45,11 +45,8 @@ final class MainViewModel: ObservableObject {
     @Published var monitorRuneTestBusy = false
     @Published var monitorRuneTestSummary = ""
     @Published var monitorZoneOutside = false
-    @Published var remoteMonitorPassword = ""
     @Published var remoteMonitorAuthenticated = false
-    @Published var remoteMonitorAuthBusy = false
     @Published var remoteMonitorAuthStatus = "未登录远程监控账号"
-    @Published var remoteMonitorPreviewURL = ""
 
     private let settingsManager = SettingsManager()
     private let windowSelector = WindowSelector()
@@ -62,7 +59,6 @@ final class MainViewModel: ObservableObject {
     private let expDataCollectionSession = EXPDataCollectionSession()
     private var screenRecordingRequestIssued = false
     private var reportedPersistenceErrors: Set<String> = []
-    private var remoteMonitorPublishURL = ""
     /// 图片回放测试期间为 true，此时忽略实时识别结果，避免注入的状态被覆盖。
     private var isRuneTestHolding = false
     private var runeTestHoldTask: Task<Void, Never>?
@@ -260,9 +256,9 @@ final class MainViewModel: ObservableObject {
             appendLog("跟补模式已启动")
         case .monitor:
             partyInviteWorker.stop()
-            if remoteMonitorAuthenticated, !remoteMonitorPublishURL.isEmpty {
+            if remoteMonitorAuthenticated {
                 do {
-                    try remoteMonitorClient.connectPublisher(to: remoteMonitorPublishURL)
+                    try remoteMonitorClient.connectPublisher()
                     appendLog("远程纯标注同步已连接")
                 } catch {
                     appendLog("远程同步连接失败，将继续使用本地监控：\(error.localizedDescription)")
@@ -552,79 +548,32 @@ final class MainViewModel: ObservableObject {
         saveSettings()
     }
 
-    func loginRemoteMonitor() {
-        guard !remoteMonitorAuthBusy else { return }
-        let username = settings.monitorAccountUsername.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !username.isEmpty, !remoteMonitorPassword.isEmpty else {
-            remoteMonitorAuthStatus = "请输入用户名和密码"
-            return
-        }
-        remoteMonitorAuthBusy = true
-        remoteMonitorAuthStatus = "正在登录..."
-        Task { [weak self] in
-            guard let self else { return }
-            defer { remoteMonitorAuthBusy = false }
-            do {
-                let account = try await remoteMonitorClient.authenticate(
-                    baseURL: settings.monitorServerBaseURL,
-                    username: username,
-                    password: remoteMonitorPassword
-                )
-                settings.monitorAccountUsername = account
-                remoteMonitorPassword = ""
-                remoteMonitorAuthenticated = true
-                saveSettings()
-                try await restoreOrCreateRemoteMonitorSession()
-                appendLog("远程监控账号登录成功")
-            } catch {
-                remoteMonitorAuthenticated = false
-                remoteMonitorAuthStatus = error.localizedDescription
-                appendLog("远程监控登录失败：\(error.localizedDescription)")
-            }
-        }
-    }
-
-    func openRemoteMonitorRegistrationPage() {
-        let baseURL = settings.monitorServerBaseURL
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(baseURL)/register") else {
-            remoteMonitorAuthStatus = "注册网址无效"
-            return
-        }
-        NSWorkspace.shared.open(url)
-        remoteMonitorAuthStatus = "已打开网页注册页面"
-    }
-
     func logoutRemoteMonitor() {
         if isRunning && mode == .monitor {
             stopWorker()
         }
         remoteMonitorClient.logout()
         remoteMonitorAuthenticated = false
-        remoteMonitorPreviewURL = ""
-        remoteMonitorPublishURL = ""
         remoteMonitorAuthStatus = "已退出远程监控账号"
+        NotificationCenter.default.post(name: .autoBuffAccountDidLogout, object: nil)
     }
 
-    func copyRemoteMonitorPreviewURL() {
-        guard !remoteMonitorPreviewURL.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(remoteMonitorPreviewURL, forType: .string)
-        remoteMonitorAuthStatus = "预览链接已复制"
-    }
-
-    func openRemoteMonitorPreviewURL() {
-        guard let url = URL(string: remoteMonitorPreviewURL) else { return }
+    func openRemoteMonitorPage() {
+        let baseURL = settings.monitorServerBaseURL
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(baseURL)/dashboard") else {
+            remoteMonitorAuthStatus = "监控网页地址无效"
+            return
+        }
         NSWorkspace.shared.open(url)
+        remoteMonitorAuthStatus = "已打开监控网页，请登录同一账号"
     }
 
     private func restoreRemoteMonitorAccount() async {
         guard let storedToken = await remoteMonitorClient.loadStoredAccessToken() else {
             return
         }
-        remoteMonitorAuthBusy = true
         remoteMonitorAuthStatus = "正在恢复登录..."
-        defer { remoteMonitorAuthBusy = false }
         do {
             let account = try await remoteMonitorClient.restore(
                 baseURL: settings.monitorServerBaseURL,
@@ -632,34 +581,12 @@ final class MainViewModel: ObservableObject {
             )
             settings.monitorAccountUsername = account
             remoteMonitorAuthenticated = true
-            try await restoreOrCreateRemoteMonitorSession()
+            remoteMonitorAuthStatus = "已登录 · 可直接开始远程监控"
         } catch {
             remoteMonitorAuthenticated = false
             remoteMonitorAuthStatus = "登录已失效，请重新登录"
+            NotificationCenter.default.post(name: .autoBuffAccountDidLogout, object: nil)
         }
-    }
-
-    private func restoreOrCreateRemoteMonitorSession() async throws {
-        if let session = try await remoteMonitorClient.restoreSession() {
-            applyRemoteMonitorSession(session)
-            remoteMonitorAuthStatus = "已登录 · 原预览链接已恢复"
-            return
-        }
-        try await createRemoteMonitorSession()
-    }
-
-    private func createRemoteMonitorSession() async throws {
-        remoteMonitorAuthStatus = "正在生成预览链接..."
-        let session = try await remoteMonitorClient.createSession(
-            deviceName: Host.current().localizedName ?? "我的 Mac"
-        )
-        applyRemoteMonitorSession(session)
-        remoteMonitorAuthStatus = "已登录 · 预览链接已生成"
-    }
-
-    private func applyRemoteMonitorSession(_ session: RemoteMonitorSessionInfo) {
-        remoteMonitorPreviewURL = session.previewURL
-        remoteMonitorPublishURL = session.publishURL
     }
 
     private func wireWorkers() {

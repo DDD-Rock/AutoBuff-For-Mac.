@@ -3,7 +3,6 @@ import Foundation
 
 private struct RemoteMonitorStoredCredentials: Codable {
     var accessToken: String?
-    var session: RemoteMonitorSessionInfo?
 }
 
 struct RemoteMonitorLocalStore {
@@ -59,24 +58,8 @@ struct RemoteMonitorLocalStore {
         try save(credentials)
     }
 
-    func loadSession() -> RemoteMonitorSessionInfo? {
-        load()?.session
-    }
-
-    func saveSession(_ session: RemoteMonitorSessionInfo) throws {
-        var credentials = load() ?? RemoteMonitorStoredCredentials()
-        credentials.session = session
-        try save(credentials)
-    }
-
     func deleteCredentials() {
         try? FileManager.default.removeItem(at: fileURL)
-    }
-
-    func deleteSession() {
-        guard var credentials = load() else { return }
-        credentials.session = nil
-        try? save(credentials)
     }
 }
 
@@ -110,26 +93,6 @@ private struct RemoteAuthResponse: Decodable {
     let accessToken: String
     let expiresAt: Int64
     let user: RemoteUser
-}
-
-private struct RemoteSessionRequest: Encodable {
-    let name: String
-}
-
-struct RemoteMonitorSessionInfo: Codable {
-    let id: String
-    let name: String
-    let previewToken: String
-    let previewURL: String
-    let publishURL: String
-}
-
-private struct RemoteCurrentSession: Decodable {
-    let id: String
-}
-
-private struct RemoteCurrentSessionResponse: Decodable {
-    let session: RemoteCurrentSession?
 }
 
 private struct RemoteAPIError: Decodable {
@@ -288,43 +251,19 @@ final class RemoteMonitorClient {
         }
     }
 
-    func createSession(deviceName: String) async throws -> RemoteMonitorSessionInfo {
-        let session: RemoteMonitorSessionInfo = try await request(
-            path: "/api/monitor/sessions",
-            method: "POST",
-            body: RemoteSessionRequest(name: deviceName),
-            authenticated: true
-        )
-        try await Task.detached(priority: .utility) {
-            try RemoteMonitorLocalStore.shared.saveSession(session)
-        }.value
-        return session
-    }
-
-    func restoreSession() async throws -> RemoteMonitorSessionInfo? {
-        guard let storedSession = await Task.detached(priority: .utility, operation: {
-            RemoteMonitorLocalStore.shared.loadSession()
-        }).value else {
-            return nil
-        }
-        let response: RemoteCurrentSessionResponse = try await request(
-            path: "/api/monitor/sessions/current",
-            method: "GET",
-            body: Optional<String>.none,
-            authenticated: true
-        )
-        guard response.session?.id == storedSession.id else {
-            await Task.detached(priority: .utility) {
-                RemoteMonitorLocalStore.shared.deleteSession()
-            }.value
-            return nil
-        }
-        return storedSession
-    }
-
-    func connectPublisher(to publishURL: String) throws {
-        guard let accessToken, let url = URL(string: publishURL) else {
+    func connectPublisher() throws {
+        guard let accessToken else {
             throw RemoteMonitorError.notAuthenticated
+        }
+        guard var components = URLComponents(string: baseURL) else {
+            throw RemoteMonitorError.invalidServerURL
+        }
+        components.scheme = components.scheme == "https" ? "wss" : "ws"
+        components.path = "/ws/device"
+        components.query = nil
+        components.fragment = nil
+        guard let url = components.url else {
+            throw RemoteMonitorError.invalidServerURL
         }
         disconnectPublisher(sendOffline: false)
         publisherURL = url

@@ -43,7 +43,7 @@ struct AutoBuffApp: App {
     var body: some Scene {
         WindowGroup("YzY - Auto Buff") {
             if #available(macOS 14.0, *) {
-                ActivationGateView {
+                AccountLoginGateView {
                     ContentView()
                 }
             } else {

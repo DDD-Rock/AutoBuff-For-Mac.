@@ -4,32 +4,18 @@ import Testing
 @testable import AutoBuff
 
 struct SettingsManagerTests {
-    @Test func remoteMonitorCredentialsPersistWithoutKeychain() throws {
+    @Test func remoteMonitorAccountTokenPersistsWithoutKeychain() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let store = RemoteMonitorLocalStore(directoryURL: tempDir)
-        let session = RemoteMonitorSessionInfo(
-            id: "session-1",
-            name: "My Mac",
-            previewToken: "preview-token",
-            previewURL: "http://example.test/preview/preview-token",
-            publishURL: "ws://example.test/ws/device?session_id=session-1"
-        )
-
         try store.saveToken("access-token")
-        try store.saveSession(session)
 
         #expect(store.loadToken() == "access-token")
-        #expect(store.loadSession()?.id == session.id)
         let attributes = try FileManager.default.attributesOfItem(
             atPath: store.fileURL.path
         )
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
-
-        store.deleteSession()
-        #expect(store.loadToken() == "access-token")
-        #expect(store.loadSession() == nil)
 
         store.deleteCredentials()
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
