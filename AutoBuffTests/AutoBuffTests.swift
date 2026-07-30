@@ -1176,6 +1176,167 @@ struct SettingsManagerTests {
         }
     }
 
+    @Test func minimapRegionDetectionIgnoresClippedMacTitleBar() {
+        let width = 1_055
+        let height = 647
+        var data = [UInt8](repeating: 90, count: width * height * 3)
+        func setGray(x: Int, y: Int, value: UInt8) {
+            let index = (y * width + x) * 3
+            data[index] = value
+            data[index + 1] = value
+            data[index + 2] = value
+        }
+        func paint(x: Int, y: Int, width: Int, height: Int, value: UInt8) {
+            for row in y..<(y + height) {
+                for column in x..<(x + width) {
+                    setGray(x: column, y: row, value: value)
+                }
+            }
+        }
+
+        // When ScreenCaptureKit retains the macOS title bar, cropping the
+        // upper-left search area turns it into a misleading full-width run.
+        paint(x: 0, y: 0, width: width, height: 29, value: 235)
+
+        let left = 2
+        let right = 180
+        let top = 29
+        let dividerTop = 86
+        let dividerBottom = 98
+        let contentTop = dividerBottom + 1
+        let bottomBorderTop = 222
+        let bottom = 234
+
+        paint(x: left, y: top, width: right - left + 1, height: 2, value: 245)
+        paint(x: left, y: top, width: 3, height: bottom - top + 1, value: 245)
+        paint(x: right - 2, y: top, width: 3, height: bottom - top + 1, value: 245)
+        paint(
+            x: left,
+            y: dividerTop,
+            width: right - left + 1,
+            height: dividerBottom - dividerTop + 1,
+            value: 245
+        )
+        paint(
+            x: left,
+            y: bottomBorderTop,
+            width: right - left + 1,
+            height: bottom - bottomBorderTop + 1,
+            value: 245
+        )
+
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+        let result = ColorDetector.detectMinimapRegion(in: image)
+        #expect(result.rect != nil)
+        if let rect = result.rect {
+            #expect(abs(Int(rect.minX) - 5) <= 2)
+            #expect(abs(Int(rect.minY) - contentTop) <= 1)
+            #expect(abs(Int(rect.maxY) - bottomBorderTop) <= 1)
+            #expect(rect.minY > 90)
+        }
+    }
+
+    @Test func minimapRegionDetectionSupportsVariableMapHeight() {
+        let width = 1_055
+        let height = 520
+        var data = [UInt8](repeating: 75, count: width * height * 3)
+        func setGray(x: Int, y: Int, value: UInt8) {
+            let index = (y * width + x) * 3
+            data[index] = value
+            data[index + 1] = value
+            data[index + 2] = value
+        }
+        func paint(x: Int, y: Int, width: Int, height: Int, value: UInt8) {
+            for row in y..<(y + height) {
+                for column in x..<(x + width) {
+                    setGray(x: column, y: row, value: value)
+                }
+            }
+        }
+
+        let left = 2
+        let right = 180
+        let top = 0
+        let dividerTop = 58
+        let dividerBottom = 66
+        let bottomBorderTop = 286
+        let bottom = 298
+
+        paint(x: left, y: top, width: right - left + 1, height: 2, value: 245)
+        paint(x: left, y: top, width: 3, height: bottom - top + 1, value: 245)
+        paint(x: right - 2, y: top, width: 3, height: bottom - top + 1, value: 245)
+        paint(
+            x: left,
+            y: dividerTop,
+            width: right - left + 1,
+            height: dividerBottom - dividerTop + 1,
+            value: 245
+        )
+        paint(
+            x: left,
+            y: bottomBorderTop,
+            width: right - left + 1,
+            height: bottom - bottomBorderTop + 1,
+            value: 245
+        )
+
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+        let result = ColorDetector.detectMinimapRegion(in: image)
+        #expect(result.rect != nil)
+        if let rect = result.rect {
+            #expect(abs(Int(rect.minY) - (dividerBottom + 1)) <= 1)
+            #expect(abs(Int(rect.maxY) - bottomBorderTop) <= 1)
+            #expect(rect.height > 200)
+        }
+    }
+
+    @Test func minimapRegionDetectionSearchesInsideManualSelection() {
+        let width = 280
+        let height = 290
+        var data = [UInt8](repeating: 80, count: width * height * 3)
+        func paint(x: Int, y: Int, width: Int, height: Int, value: UInt8) {
+            for row in y..<(y + height) {
+                for column in x..<(x + width) {
+                    let index = (row * 280 + column) * 3
+                    data[index] = value
+                    data[index + 1] = value
+                    data[index + 2] = value
+                }
+            }
+        }
+
+        let left = 42
+        let right = 220
+        let top = 24
+        let dividerBottom = 92
+        let bottomBorderTop = 216
+        let bottom = 228
+        paint(x: left, y: top, width: right - left + 1, height: 2, value: 245)
+        paint(x: left, y: top, width: 3, height: bottom - top + 1, value: 245)
+        paint(x: right - 2, y: top, width: 3, height: bottom - top + 1, value: 245)
+        paint(x: left, y: 82, width: right - left + 1, height: 11, value: 245)
+        paint(
+            x: left,
+            y: bottomBorderTop,
+            width: right - left + 1,
+            height: bottom - bottomBorderTop + 1,
+            value: 245
+        )
+
+        let result = ColorDetector.detectMinimapRegion(
+            in: ImageBuffer(width: width, height: height, bgr: data),
+            searchWidth: width,
+            searchHeight: height,
+            requiresTopLeftAnchor: false
+        )
+        #expect(result.rect != nil)
+        if let rect = result.rect {
+            #expect(abs(Int(rect.minX) - (left + 3)) <= 2)
+            #expect(abs(Int(rect.minY) - (dividerBottom + 1)) <= 1)
+            #expect(abs(Int(rect.maxY) - bottomBorderTop) <= 1)
+        }
+    }
+
     @Test func minimapContentValidationRejectsWhiteBorder() {
         let width = 120
         let height = 80
@@ -1221,6 +1382,9 @@ struct SettingsManagerTests {
             // Current compact-height, ultra-wide Free Market window whose
             // ScreenCaptureKit frame retains the macOS title bar.
             (138, 1_722, 519, 29),
+            // Some maps use a narrower panel at the same ordinary window
+            // resolution; panel width is map-dependent, not UI-scale-only.
+            (138, 1_055, 647, 29),
         ]
 
         for (panelWidth, width, height, frameTop) in cases {

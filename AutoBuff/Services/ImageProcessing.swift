@@ -631,7 +631,8 @@ enum ColorDetector {
     static func detectMinimapRegion(
         in image: ImageBuffer,
         searchWidth: Int = 480,
-        searchHeight: Int = 420
+        searchHeight: Int = 420,
+        requiresTopLeftAnchor: Bool = true
     ) -> DarkRegionDetectionResult {
         // The minimap panel is permanently anchored to the top-left of the
         // game content. Its light frame is considerably more stable than the
@@ -644,7 +645,8 @@ enum ColorDetector {
         if let frameRegion = detectMinimapByWhiteFrame(
             in: image,
             searchWidth: searchWidth,
-            searchHeight: searchHeight
+            searchHeight: searchHeight,
+            requiresTopLeftAnchor: requiresTopLeftAnchor
         ) {
             return frameRegion
         }
@@ -816,22 +818,29 @@ enum ColorDetector {
     private static func detectMinimapByWhiteFrame(
         in image: ImageBuffer,
         searchWidth: Int,
-        searchHeight: Int
+        searchHeight: Int,
+        requiresTopLeftAnchor: Bool
     ) -> DarkRegionDetectionResult? {
         // ScreenCaptureKit captures the game content without the macOS title
         // bar. The panel therefore begins within a few pixels of (0, 0).
         // Grow the search box for wide windows because the game scales this
         // entire UI panel with window width.
         let dynamicSearchSize = min(640, max(searchWidth, image.width / 4))
-        let sw = min(dynamicSearchSize, image.width)
-        let sh = min(
-            max(searchHeight, dynamicSearchSize),
-            image.height
-        )
+        let sw = requiresTopLeftAnchor
+            ? min(dynamicSearchSize, image.width)
+            : min(searchWidth, image.width)
+        let sh = requiresTopLeftAnchor
+            ? min(max(searchHeight, dynamicSearchSize), image.height)
+            : min(searchHeight, image.height)
         guard let region = image.cropped(x: 0, y: 0, width: sw, height: sh) else { return nil }
 
         let runs = brightHorizontalRuns(in: region).filter {
-            $0.width >= 100 && $0.width <= 560 && $0.startX <= 24
+            $0.width >= 100
+                && $0.width <= 560
+                && (!requiresTopLeftAnchor || $0.startX <= 24)
+                // A retained macOS title bar is clipped by this top-left
+                // search crop and otherwise looks like a perfect frame top.
+                && (!requiresTopLeftAnchor || $0.endX < region.width - 3)
         }
         var bestRect: CGRect?
         var bestScore = -Double.infinity
@@ -839,8 +848,9 @@ enum ColorDetector {
         // Depending on the ScreenCaptureKit/window-server path, the captured
         // frame may retain the macOS title bar. Keep the panel anchored to the
         // upper-left while allowing that 25–50 point vertical offset.
-        let maximumFrameTop = min(64, max(24, region.height / 12))
-
+        let maximumFrameTop = requiresTopLeftAnchor
+            ? min(64, max(24, region.height / 12))
+            : max(0, region.height - 110)
         for topIndex in runs.indices {
             if Task.isCancelled { return nil }
             let top = runs[topIndex]
@@ -855,49 +865,48 @@ enum ColorDetector {
                 // Use the overlap of the two horizontal frame rows. Nearby
                 // bright game artwork can extend either row, while the actual
                 // panel width remains their common span.
-                let left = max(top.startX, bottom.startX)
-                let right = min(top.endX, bottom.endX)
+                let approximateLeft = max(top.startX, bottom.startX)
+                let approximateRight = min(top.endX, bottom.endX)
+                let approximateWidth = approximateRight - approximateLeft + 1
+                guard approximateWidth >= 100,
+                      approximateWidth <= 560,
+                      (!requiresTopLeftAnchor || approximateLeft <= 18),
+                      let sides = refinedMinimapFrameSides(
+                          in: region,
+                          top: top.y,
+                          bottom: bottom.y,
+                          approximateLeft: approximateLeft,
+                          approximateRight: approximateRight
+                      ) else { continue }
+                let left = sides.left
+                let right = sides.right
                 let width = right - left + 1
-                guard width >= 100, width <= 560, left <= 18 else { continue }
 
-                // Ordinary windows keep the panel near one sixth of the
-                // content width. Short, ultra-wide windows instead scale the
-                // UI from the available height, making the panel less than one
-                // tenth of the content width. Accept either stable scale model.
-                let widthToWindowWidth = Double(width) / Double(max(image.width, 1))
-                let widthToWindowHeight = Double(width) / Double(max(image.height, 1))
-                let matchesOrdinaryWidthScale =
-                    widthToWindowWidth >= 0.14 && widthToWindowWidth <= 0.21
-                let matchesUltraWideHeightScale =
-                    widthToWindowHeight >= 0.22 && widthToWindowHeight <= 0.38
-                guard matchesOrdinaryWidthScale || matchesUltraWideHeightScale else {
-                    continue
-                }
-
-                // Across supported resolutions the panel is slightly taller
-                // than it is wide. This excludes chat bars and long platform
-                // edges which may also be light and touch the left side.
+                // Map content height varies by map. Keep only a deliberately
+                // broad geometry guard here; the four bright frame edges are
+                // the actual identity check.
                 let panelAspect = Double(height) / Double(width)
-                guard panelAspect >= 1.02, panelAspect <= 1.28 else { continue }
+                guard panelAspect >= 0.62, panelAspect <= 2.40 else { continue }
 
-                let leftSide = brightVerticalSupport(in: region, x: left, y1: top.y, y2: bottom.y)
-                let rightSide = brightVerticalSupport(in: region, x: right, y1: top.y, y2: bottom.y)
-                let requiredSideSupport = Int(Double(height) * 0.62)
+                let leftSide = sides.leftSupport
+                let rightSide = sides.rightSupport
+                let requiredSideSupport = Int(Double(height) * 0.78)
                 guard leftSide >= requiredSideSupport,
                       rightSide >= requiredSideSupport,
-                      let contentRect = minimapContentRect(fromPanelFrame: CGRect(
-                          x: left,
-                          y: top.y,
-                          width: width,
-                          height: height
-                      )) else { continue }
+                      let contentRect = minimapContentRect(
+                          in: region,
+                          panelFrame: CGRect(
+                              x: left,
+                              y: top.y,
+                              width: width,
+                              height: height
+                          )
+                      ) else { continue }
                 candidateCount += 1
 
                 let sideSupport = Double(leftSide + rightSide) / Double(height * 2)
-                let expectedAspectPenalty = abs(panelAspect - 1.13)
                 let score = sideSupport * 10_000
                     + Double(width * height) * 0.02
-                    - expectedAspectPenalty * 2_000
                     - Double(top.y + left) * 120
 
                 if score > bestScore {
@@ -930,7 +939,10 @@ enum ColorDetector {
         }
 
         let runs = brightHorizontalRuns(in: region).filter {
-            $0.width >= 100 && $0.width <= 560 && $0.startX <= 24
+            $0.width >= 100
+                && $0.width <= 560
+                && $0.startX <= 24
+                && $0.endX < region.width - 3
         }
         let maximumFrameTop = min(64, max(24, region.height / 12))
         let topRuns = runs.filter { $0.y <= maximumFrameTop }
@@ -941,33 +953,28 @@ enum ColorDetector {
             for bottom in runs where bottom.y > top.y {
                 let height = bottom.y - top.y + 1
                 guard height >= 110, height <= 600 else { continue }
-                let left = max(top.startX, bottom.startX)
-                let right = min(top.endX, bottom.endX)
-                let width = right - left + 1
-                guard width >= 100, width <= 560, left <= 18 else { continue }
-                let widthToWindowWidth = Double(width) / Double(max(image.width, 1))
-                let widthToWindowHeight = Double(width) / Double(max(image.height, 1))
-                let scaleMatches =
-                    (widthToWindowWidth >= 0.14 && widthToWindowWidth <= 0.21)
-                    || (widthToWindowHeight >= 0.22 && widthToWindowHeight <= 0.38)
+                let approximateLeft = max(top.startX, bottom.startX)
+                let approximateRight = min(top.endX, bottom.endX)
+                let approximateWidth = approximateRight - approximateLeft + 1
+                guard approximateWidth >= 100,
+                      approximateWidth <= 560,
+                      approximateLeft <= 18,
+                      let sides = refinedMinimapFrameSides(
+                          in: region,
+                          top: top.y,
+                          bottom: bottom.y,
+                          approximateLeft: approximateLeft,
+                          approximateRight: approximateRight
+                      ) else { continue }
+                let width = sides.right - sides.left + 1
                 let panelAspect = Double(height) / Double(width)
-                guard scaleMatches, panelAspect >= 1.02, panelAspect <= 1.28 else {
+                guard panelAspect >= 0.62, panelAspect <= 2.40 else {
                     continue
                 }
                 geometryCount += 1
-                let leftSide = brightVerticalSupport(
-                    in: region,
-                    x: left,
-                    y1: top.y,
-                    y2: bottom.y
-                )
-                let rightSide = brightVerticalSupport(
-                    in: region,
-                    x: right,
-                    y1: top.y,
-                    y2: bottom.y
-                )
-                let sideRatio = Double(min(leftSide, rightSide)) / Double(height)
+                let sideRatio = Double(
+                    min(sides.leftSupport, sides.rightSupport)
+                ) / Double(height)
                 maximumSideRatio = max(maximumSideRatio, sideRatio)
             }
         }
@@ -978,27 +985,156 @@ enum ColorDetector {
         return "白框诊断：横线=\(runs.count)，顶边=[\(topDescription)]，几何候选=\(geometryCount)，双侧支持=\(String(format: "%.2f", maximumSideRatio))"
     }
 
-    private static func minimapContentRect(fromPanelFrame frame: CGRect) -> CGRect? {
+    private struct MinimapFrameSides {
+        let left: Int
+        let right: Int
+        let leftSupport: Int
+        let rightSupport: Int
+    }
+
+    private static func refinedMinimapFrameSides(
+        in image: ImageBuffer,
+        top: Int,
+        bottom: Int,
+        approximateLeft: Int,
+        approximateRight: Int
+    ) -> MinimapFrameSides? {
+        guard bottom > top, approximateRight > approximateLeft else { return nil }
+        let approximateWidth = approximateRight - approximateLeft + 1
+        let radius = max(12, Int((Double(approximateWidth) * 0.10).rounded()))
+        let leftRange = max(0, approximateLeft - radius)...min(
+            approximateRight,
+            approximateLeft + radius
+        )
+        let rightRange = max(
+            approximateLeft,
+            approximateRight - radius
+        )...min(image.width - 1, approximateRight + radius)
+
+        let leftSamples = leftRange.map {
+            ($0, brightVerticalSupport(in: image, x: $0, y1: top, y2: bottom))
+        }
+        let rightSamples = rightRange.map {
+            ($0, brightVerticalSupport(in: image, x: $0, y1: top, y2: bottom))
+        }
+        guard let maximumLeftSupport = leftSamples.map(\.1).max(),
+              let maximumRightSupport = rightSamples.map(\.1).max() else {
+            return nil
+        }
+
+        // isBrightFramePixelNear expands a thin border by one pixel. Select
+        // the outer edge of the high-support band, preserving the whole panel
+        // while ignoring bright game artwork beside it.
+        let leftCutoff = Int(Double(maximumLeftSupport) * 0.92)
+        let rightCutoff = Int(Double(maximumRightSupport) * 0.92)
+        guard let left = leftSamples.first(where: { $0.1 >= leftCutoff }),
+              let right = rightSamples.last(where: { $0.1 >= rightCutoff }),
+              right.0 - left.0 + 1 >= 100 else {
+            return nil
+        }
+        return MinimapFrameSides(
+            left: left.0,
+            right: right.0,
+            leftSupport: left.1,
+            rightSupport: right.1
+        )
+    }
+
+    private struct BrightBand {
+        let start: Int
+        let end: Int
+
+        var height: Int { end - start + 1 }
+    }
+
+    private static func minimapContentRect(
+        in image: ImageBuffer,
+        panelFrame frame: CGRect
+    ) -> CGRect? {
         let panelWidth = Int(frame.width)
         let panelHeight = Int(frame.height)
         guard panelWidth >= 100, panelHeight >= 110 else { return nil }
 
-        // The title/map-name block occupies the upper third of the panel.
-        // These proportions were verified across full-screen, 16:9 and wide
-        // window captures; the game scales the complete panel uniformly.
         let horizontalInset = max(3, Int((Double(panelWidth) * 0.018).rounded()))
-        let contentTopInset = Int((Double(panelHeight) * 0.335).rounded())
-        let contentBottomInset = max(5, Int((Double(panelHeight) * 0.052).rounded()))
+        let frameLeft = Int(frame.minX)
+        let frameTop = Int(frame.minY)
+        let frameRight = Int(frame.maxX) - 1
+        let frameBottom = Int(frame.maxY) - 1
+
+        // The map-name block has a fixed height for a given UI scale, while
+        // the map canvas below it changes height from map to map. Detect the
+        // full-width separator directly instead of taking a percentage of the
+        // total panel height.
+        let bands = fullWidthBrightBands(
+            in: image,
+            left: frameLeft,
+            right: frameRight,
+            top: frameTop,
+            bottom: frameBottom
+        )
+        let minimumDividerY = frameTop + Int(Double(panelWidth) * 0.20)
+        let maximumDividerY = min(
+            frameBottom - 20,
+            frameTop + Int(Double(panelWidth) * 0.62)
+        )
+        let divider = bands.first {
+            $0.height >= 4
+                && $0.start >= minimumDividerY
+                && $0.end <= maximumDividerY
+        }
+        let bottomBorder = bands.last {
+            $0.height >= 4
+                && frameBottom - $0.end <= 3
+                && frameBottom - $0.start <= max(10, Int(Double(panelWidth) * 0.14))
+        }
+
+        let contentTop = divider.map { $0.end + 1 }
+            ?? frameTop + Int((Double(panelWidth) * 0.38).rounded())
+        let contentBottomExclusive = bottomBorder?.start
+            ?? frameBottom - max(5, Int((Double(panelWidth) * 0.059).rounded())) + 1
         let contentWidth = panelWidth - horizontalInset * 2
-        let contentHeight = panelHeight - contentTopInset - contentBottomInset
+        let contentHeight = contentBottomExclusive - contentTop
         guard contentWidth >= 70, contentHeight >= 45 else { return nil }
 
         return CGRect(
-            x: Int(frame.minX) + horizontalInset,
-            y: Int(frame.minY) + contentTopInset,
+            x: frameLeft + horizontalInset,
+            y: contentTop,
             width: contentWidth,
             height: contentHeight
         )
+    }
+
+    private static func fullWidthBrightBands(
+        in image: ImageBuffer,
+        left: Int,
+        right: Int,
+        top: Int,
+        bottom: Int
+    ) -> [BrightBand] {
+        guard right >= left, bottom >= top else { return [] }
+        let width = right - left + 1
+        var bands: [BrightBand] = []
+        var start: Int?
+        var lastBright = -1
+
+        for y in top...bottom {
+            var brightCount = 0
+            for x in left...right where isBrightFramePixelNear(image, x: x, y: y) {
+                brightCount += 1
+            }
+            if Double(brightCount) / Double(width) >= 0.88 {
+                if start == nil { start = y }
+                lastBright = y
+            } else if let bandStart = start {
+                bands.append(BrightBand(start: bandStart, end: lastBright))
+                start = nil
+                lastBright = -1
+            }
+        }
+        if let bandStart = start {
+            bands.append(BrightBand(start: bandStart, end: lastBright))
+        }
+        return bands
     }
     
     static func autoDetectDarkRegion(

@@ -178,7 +178,6 @@ struct ContentView: View {
                 .padding(isCompact ? 8 : 14)
         }
         .frame(width: isCompact ? 64 : 224)
-        .animation(.snappy(duration: 0.22), value: isCompact)
         .background(AppTheme.panel.opacity(0.82))
         .contentShape(Rectangle())
         .onTapGesture { dismissInputFocus() }
@@ -623,28 +622,9 @@ struct ContentView: View {
     }
 
     private func toggleSidebar() {
-        let willExpand = !sidebarExpanded
-        sidebarExpanded = willExpand
-
-        guard let window = NSApp.keyWindow else { return }
-        let widthDelta: CGFloat = willExpand ? 160 : -160
-        let previousRightEdge = window.frame.maxX
-        let newContentWidth = max(
-            MainWindowLayout.minimumContentWidth,
-            window.contentLayoutRect.width + widthDelta
-        )
-
-        window.setContentSize(NSSize(
-            width: newContentWidth,
-            height: window.contentLayoutRect.height
-        ))
-        var adjustedFrame = window.frame
-        adjustedFrame.origin.x = previousRightEdge - adjustedFrame.width
-        window.setFrame(
-            window.constrainFrameRect(adjustedFrame, to: window.screen),
-            display: true,
-            animate: true
-        )
+        // 紧凑与展开状态会替换大量按钮、help 和可访问区域。不要对这次结构变化
+        // 做隐式宽度动画，否则 AppKit 会在动画过程中反复重建窗口 structural regions。
+        sidebarExpanded.toggle()
     }
 
     private var modeDescription: String {

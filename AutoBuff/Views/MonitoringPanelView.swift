@@ -364,7 +364,6 @@ struct MonitoringPanelView: View {
                 .frame(width: 52, alignment: .leading)
         }
         .disabled(viewModel.settings.monitorSafeZone == nil)
-        .fixedSize()
     }
 
     /// 用本地截图回放整条符文链路，方便在不等游戏真的出符文的情况下验证。

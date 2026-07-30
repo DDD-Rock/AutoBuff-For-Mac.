@@ -60,6 +60,26 @@ final class AutoBuffUITests: XCTestCase {
     }
 
     @MainActor
+    func testRepeatedSidebarTogglesKeepTheWindowStable() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 3))
+        let initialFrame = window.frame
+        let toggle = app.descendants(matching: .any)["sidebar.toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 3))
+
+        for _ in 0..<12 {
+            toggle.click()
+        }
+
+        XCTAssertTrue(window.exists)
+        XCTAssertEqual(window.frame.width, initialFrame.width, accuracy: 1)
+        XCTAssertEqual(window.frame.height, initialFrame.height, accuracy: 1)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
             // This measures how long it takes to launch your application.

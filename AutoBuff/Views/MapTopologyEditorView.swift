@@ -603,9 +603,9 @@ struct MapTopologyEditorView: View {
 
     private var manualCropBody: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("自动识别未通过，请在左上角截图中框选纯黑色小地图内容区。", systemImage: "crop")
+            Label("请在完整游戏画面中大致框住小地图面板。", systemImage: "crop")
                 .font(.headline)
-            Text("框内不能包含白色边框和上方地图名称栏。拖动鼠标框选后点击“使用框选区域”。")
+            Text("框内可以包含白色边框和地图名称。确认后，软件会在所选范围内继续识别并裁出纯内容区。")
                 .font(.caption)
                 .foregroundStyle(AppTheme.textSecondary)
             manualCropCanvas
@@ -613,9 +613,11 @@ struct MapTopologyEditorView: View {
                 .background(Color.black)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay { RoundedRectangle(cornerRadius: 8).stroke(AppTheme.border) }
-            Button("使用框选区域", systemImage: "checkmark") { applyManualCrop() }
+            Button("在框选范围内识别", systemImage: "viewfinder") {
+                Task { await applyManualCrop() }
+            }
                 .buttonStyle(.borderedProminent)
-                .disabled(cropRect(in: fallbackPreviewSize) == nil)
+                .disabled(cropRect(in: fallbackPreviewSize) == nil || isLoading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -658,7 +660,14 @@ struct MapTopologyEditorView: View {
             Text("请确认游戏窗口可见、小地图已展开，并已授予屏幕录制权限。")
                 .font(.caption)
                 .foregroundStyle(AppTheme.textSecondary)
-            Button("重新识别") { Task { await loadMinimap() } }
+            HStack(spacing: 8) {
+                Button("重新识别", systemImage: "arrow.clockwise") {
+                    Task { await loadMinimap() }
+                }
+                Button("手动框选", systemImage: "crop") {
+                    Task { await beginManualCrop() }
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1191,7 +1200,8 @@ struct MapTopologyEditorView: View {
         return rect.width >= 30 && rect.height >= 20 ? rect : nil
     }
 
-    private func applyManualCrop() {
+    @MainActor
+    private func applyManualCrop() async {
         guard let fallbackBuffer,
               let displayRect = cropRect(in: fallbackPreviewSize),
               fallbackPreviewSize.width > 0,
@@ -1202,14 +1212,68 @@ struct MapTopologyEditorView: View {
         let y = max(0, Int(displayRect.minY * scaleY))
         let width = min(fallbackBuffer.width - x, Int(displayRect.width * scaleX))
         let height = min(fallbackBuffer.height - y, Int(displayRect.height * scaleY))
-        guard let selected = fallbackBuffer.cropped(x: x, y: y, width: width, height: height) else { return }
-        let validation = ColorDetector.validateMinimapContent(in: selected)
-        guard validation.isValid else {
-            statusText = "框选区域未通过校验：\(validation.summary)"
+        guard let searchBuffer = fallbackBuffer.cropped(
+            x: x,
+            y: y,
+            width: width,
+            height: height
+        ) else { return }
+
+        isLoading = true
+        statusText = "正在框选范围内识别小地图..."
+        let result = await Task.detached(priority: .userInitiated) {
+            ColorDetector.detectMinimapRegion(
+                in: searchBuffer,
+                searchWidth: searchBuffer.width,
+                searchHeight: searchBuffer.height,
+                requiresTopLeftAnchor: false
+            )
+        }.value
+
+        guard let localRegion = result.rect,
+              let selected = searchBuffer.cropped(
+                  x: Int(localRegion.minX),
+                  y: Int(localRegion.minY),
+                  width: Int(localRegion.width),
+                  height: Int(localRegion.height)
+              ) else {
+            statusText = "框选范围内仍未找到小地图，请放宽范围并完整包含白框后重试。"
+            isLoading = false
             return
         }
-        contentRegion = CGRect(x: x, y: y, width: width, height: height)
+        let resolvedRegion = localRegion.offsetBy(dx: CGFloat(x), dy: CGFloat(y))
+
+        let validation = ColorDetector.validateMinimapContent(in: selected)
+        guard validation.isValid else {
+            statusText = "框选范围内仍未找到小地图：\(validation.summary)"
+            isLoading = false
+            return
+        }
+        contentRegion = resolvedRegion
         acceptMinimap(selected, validation: validation)
+        isLoading = false
+    }
+
+    @MainActor
+    private func beginManualCrop() async {
+        isLoading = true
+        fallbackBuffer = nil
+        fallbackImage = nil
+        cropStart = nil
+        cropCurrent = nil
+        statusText = "正在读取完整游戏画面..."
+
+        let monitor = MinimapMonitor()
+        monitor.setWindow(windowID)
+        do {
+            let fullScreen = try await monitor.captureGameScreen()
+            fallbackBuffer = fullScreen
+            fallbackImage = fullScreen.mapEditorImage()
+            statusText = "请大致框住小地图面板，再点击“在框选范围内识别”。"
+        } catch {
+            statusText = "完整游戏画面加载失败：\(error.localizedDescription)"
+        }
+        isLoading = false
     }
 
     @MainActor
@@ -1238,18 +1302,7 @@ struct MapTopologyEditorView: View {
             } else {
                 statusText = "自动裁剪失败：\(monitor.lastDetectionSummary)"
             }
-
-            let fullScreen = try await monitor.captureGameScreen()
-            if let search = fullScreen.cropped(
-                x: 0,
-                y: 0,
-                width: min(320, fullScreen.width),
-                height: min(360, fullScreen.height)
-            ) {
-                fallbackBuffer = search
-                fallbackImage = search.mapEditorImage()
-                statusText += "；请手动框选纯内容区"
-            }
+            statusText += "；可点击“手动框选”指定搜索范围"
         } catch {
             statusText = "加载小地图失败：\(error.localizedDescription)"
         }

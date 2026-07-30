@@ -66,7 +66,7 @@ struct PortalMarkerView: View {
                     }
             } else if let image = gameImage {
                 VStack(spacing: 7) {
-                    Text("在游戏画面中拖动圈选小地图的大致范围")
+                    Text("在完整游戏画面中拖动圈选小地图的大致范围")
                         .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
 
@@ -105,7 +105,7 @@ struct PortalMarkerView: View {
                                 .stroke(AppTheme.border)
                         }
 
-                    Text("请沿小地图内容边缘框选，不要包含标题栏")
+                    Text("可以包含白框和地图名称，软件会在框内继续识别纯内容区")
                         .font(.system(size: 10))
                         .foregroundStyle(AppTheme.textSecondary)
                 }
@@ -123,8 +123,13 @@ struct PortalMarkerView: View {
                         .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
                         .multilineTextAlignment(.center)
-                    Button("重试") {
-                        Task { await loadMinimap() }
+                    HStack(spacing: 8) {
+                        Button("重新识别", systemImage: "arrow.clockwise") {
+                            Task { await loadMinimap() }
+                        }
+                        Button("手动框选", systemImage: "crop") {
+                            Task { await beginManualSelection() }
+                        }
                     }
                 }
                 .frame(width: 420, height: 240)
@@ -276,10 +281,7 @@ struct PortalMarkerView: View {
         do {
             let captured = try await monitor.captureGameScreen()
             guard loadRequestID == requestID, isLoading else { return }
-            gameBuffer = captured
-            gameImage = captured.toPreviewImage()
-            gameSize = CGSize(width: captured.width, height: captured.height)
-            statusText = "正在自动识别；也可以直接在画面中拖动圈选。"
+            statusText = "正在自动识别小地图..."
 
             let detectionTask = Task.detached(priority: .userInitiated) {
                 ColorDetector.detectMinimapRegion(in: captured)
@@ -291,7 +293,7 @@ struct PortalMarkerView: View {
             }
             guard loadRequestID == requestID, isLoading else { return }
             guard let region = result.rect else {
-                statusText = "自动识别失败，请在画面中拖动圈选小地图范围。"
+                statusText = "自动识别失败。可以重新识别，或点击“手动框选”指定搜索范围。"
                 isLoading = false
                 return
             }
@@ -303,6 +305,37 @@ struct PortalMarkerView: View {
         }
     }
 
+    private func beginManualSelection() async {
+        automaticDetectionTask?.cancel()
+        automaticDetectionTask = nil
+        let requestID = UUID()
+        loadRequestID = requestID
+        isLoading = true
+        minimapImage = nil
+        detectedRegion = nil
+        gameBuffer = nil
+        gameImage = nil
+        selectedSearchRegion = nil
+        selectionStart = nil
+        statusText = "正在读取完整游戏画面..."
+
+        let monitor = MinimapMonitor()
+        monitor.setWindow(windowID)
+        do {
+            let captured = try await monitor.captureGameScreen()
+            guard loadRequestID == requestID, isLoading else { return }
+            gameBuffer = captured
+            gameImage = captured.toPreviewImage()
+            gameSize = CGSize(width: captured.width, height: captured.height)
+            statusText = "请大致框住小地图面板，软件会在框内继续识别。"
+            isLoading = false
+        } catch {
+            guard loadRequestID == requestID else { return }
+            statusText = "无法读取完整游戏画面：\(error.localizedDescription)"
+            isLoading = false
+        }
+    }
+
     private func recognizeSelectedRange(_ searchRegion: CGRect) async {
         guard let gameBuffer else { return }
         automaticDetectionTask?.cancel()
@@ -310,10 +343,36 @@ struct PortalMarkerView: View {
         let requestID = UUID()
         loadRequestID = requestID
         isLoading = true
-        statusText = "正在使用所选小地图范围..."
+        statusText = "正在所选范围内识别小地图..."
         do {
+            let x = max(0, Int(searchRegion.minX))
+            let y = max(0, Int(searchRegion.minY))
+            let width = min(Int(searchRegion.width), gameBuffer.width - x)
+            let height = min(Int(searchRegion.height), gameBuffer.height - y)
+            guard let searchBuffer = gameBuffer.cropped(
+                x: x,
+                y: y,
+                width: width,
+                height: height
+            ) else {
+                throw GameCaptureError.noImage
+            }
+            let result = await Task.detached(priority: .userInitiated) {
+                ColorDetector.detectMinimapRegion(
+                    in: searchBuffer,
+                    searchWidth: searchBuffer.width,
+                    searchHeight: searchBuffer.height,
+                    requiresTopLeftAnchor: false
+                )
+            }.value
+            guard let localRegion = result.rect else {
+                statusText = "框选范围内仍未找到小地图，请放宽范围并完整包含白框后重试。"
+                isLoading = false
+                return
+            }
+            let resolvedRegion = localRegion.offsetBy(dx: CGFloat(x), dy: CGFloat(y))
             try await applyDetectedRegion(
-                searchRegion,
+                resolvedRegion,
                 in: gameBuffer,
                 requestID: requestID
             )
