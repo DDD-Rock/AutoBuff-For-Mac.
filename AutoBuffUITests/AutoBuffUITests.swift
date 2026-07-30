@@ -60,23 +60,17 @@ final class AutoBuffUITests: XCTestCase {
     }
 
     @MainActor
-    func testRepeatedSidebarTogglesKeepTheWindowStable() throws {
+    func testSidebarIsAlwaysVisibleWithoutAToggle() throws {
         let app = XCUIApplication()
         app.launch()
 
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 3))
-        let initialFrame = window.frame
         let toggle = app.descendants(matching: .any)["sidebar.toggle"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 3))
-
-        for _ in 0..<12 {
-            toggle.click()
-        }
-
+        XCTAssertFalse(toggle.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["app.title"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["mode.dead"].exists)
         XCTAssertTrue(window.exists)
-        XCTAssertEqual(window.frame.width, initialFrame.width, accuracy: 1)
-        XCTAssertEqual(window.frame.height, initialFrame.height, accuracy: 1)
     }
 
     @MainActor

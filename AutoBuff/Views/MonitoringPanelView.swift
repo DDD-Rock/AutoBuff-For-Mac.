@@ -441,6 +441,15 @@ struct MonitoringPanelView: View {
                     }
                     .controlSize(.small)
                 }
+                HStack(spacing: 6) {
+                    Image(systemName: "desktopcomputer")
+                        .foregroundStyle(AppTheme.accent)
+                    Text("本机名称：\(viewModel.remoteClientName)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .textSelection(.enabled)
+                    Spacer()
+                }
             } else {
                 HStack(spacing: 8) {
                     ProgressView()

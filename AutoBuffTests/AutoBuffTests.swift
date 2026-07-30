@@ -21,11 +21,10 @@ struct SettingsManagerTests {
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
     }
 
-    @Test func sidebarUsesThePersistedDisplayPreference() {
-        #expect(MainWindowLayout.minimumContentWidth == 520)
-        #expect(MainWindowLayout.preferredContentWidth == 580)
-        #expect(!MainWindowLayout.usesCompactSidebar(prefersExpanded: true))
-        #expect(MainWindowLayout.usesCompactSidebar(prefersExpanded: false))
+    @Test func sidebarUsesTheFixedNarrowLayout() {
+        #expect(MainWindowLayout.sidebarWidth == 56)
+        #expect(MainWindowLayout.minimumContentWidth == 540)
+        #expect(MainWindowLayout.preferredContentWidth == 600)
     }
 
     @Test func mainWindowHeightAdaptsToAvailableScreenSpace() {

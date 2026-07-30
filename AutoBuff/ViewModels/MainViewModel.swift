@@ -47,6 +47,7 @@ final class MainViewModel: ObservableObject {
     @Published var monitorZoneOutside = false
     @Published var remoteMonitorAuthenticated = false
     @Published var remoteMonitorAuthStatus = "未登录远程监控账号"
+    @Published var remoteClientName = "正在分配客户端名称"
 
     private let settingsManager = SettingsManager()
     private let windowSelector = WindowSelector()
@@ -80,6 +81,7 @@ final class MainViewModel: ObservableObject {
         settings = settingsManager.load()
         mode = settings.mode
         wireWorkers()
+        wireRemoteMonitor()
         wireEXPDataCollector()
         settingsManager.protectionWarnings.forEach {
             appendLog("⚠️ \($0)")
@@ -148,6 +150,7 @@ final class MainViewModel: ObservableObject {
         settings.returnToMarket = newMode == .deadFlower
         clearMonitorState(status: "尚未开始监控")
         saveSettings()
+        publishRemoteClientState()
         syncPartyInviteWorker(logMissingRequirements: false)
     }
 
@@ -256,14 +259,7 @@ final class MainViewModel: ObservableObject {
             appendLog("跟补模式已启动")
         case .monitor:
             partyInviteWorker.stop()
-            if remoteMonitorAuthenticated {
-                do {
-                    try remoteMonitorClient.connectPublisher()
-                    appendLog("远程纯标注同步已连接")
-                } catch {
-                    appendLog("远程同步连接失败，将继续使用本地监控：\(error.localizedDescription)")
-                }
-            } else {
+            if !remoteMonitorAuthenticated {
                 appendLog("未登录远程账号，仅使用软件内本地预览")
             }
             monitoringSession.start(
@@ -272,6 +268,7 @@ final class MainViewModel: ObservableObject {
             )
             appendLog("监控模式已启动（只读，不发送输入）")
         }
+        publishRemoteClientState()
     }
 
     func stopWorker(resumePartyInvite: Bool = true) {
@@ -279,7 +276,6 @@ final class MainViewModel: ObservableObject {
         deadWorker.stop()
         followHealWorker.stop()
         monitoringSession.stop()
-        remoteMonitorClient.disconnectPublisher()
         isRunning = false
         countdowns = [:]
         clearMonitorState(status: "监控已停止")
@@ -287,6 +283,7 @@ final class MainViewModel: ObservableObject {
             syncPartyInviteWorker(logMissingRequirements: false)
         }
         appendLog("已停止")
+        publishRemoteClientState()
     }
 
     func buildLiveSkills() -> [SkillConfig] {
@@ -545,6 +542,7 @@ final class MainViewModel: ObservableObject {
         expDataCollectionSession.stop()
         partyInviteWorker.stop()
         stopWorker(resumePartyInvite: false)
+        remoteMonitorClient.disconnectPublisher(sendOffline: false)
         saveSettings()
     }
 
@@ -561,7 +559,7 @@ final class MainViewModel: ObservableObject {
     func openRemoteMonitorPage() {
         let baseURL = settings.monitorServerBaseURL
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(baseURL)/dashboard") else {
+        guard let url = URL(string: "\(baseURL)/clients") else {
             remoteMonitorAuthStatus = "监控网页地址无效"
             return
         }
@@ -581,12 +579,43 @@ final class MainViewModel: ObservableObject {
             )
             settings.monitorAccountUsername = account
             remoteMonitorAuthenticated = true
-            remoteMonitorAuthStatus = "已登录 · 可直接开始远程监控"
+            try remoteMonitorClient.connectPublisher()
+            publishRemoteClientState()
+            remoteMonitorAuthStatus = "已登录 · 客户端管理通道已连接"
         } catch {
             remoteMonitorAuthenticated = false
             remoteMonitorAuthStatus = "登录已失效，请重新登录"
             NotificationCenter.default.post(name: .autoBuffAccountDidLogout, object: nil)
         }
+    }
+
+    private func wireRemoteMonitor() {
+        remoteMonitorClient.onIdentity = { [weak self] name in
+            self?.remoteClientName = name
+        }
+        remoteMonitorClient.onCommand = { [weak self] action in
+            guard let self else { return }
+            switch action {
+            case "start":
+                if !isRunning {
+                    appendLog("收到网页远程开始指令")
+                    startWorker()
+                }
+            case "stop":
+                if isRunning {
+                    appendLog("收到网页远程停止指令")
+                    stopWorker()
+                }
+            default:
+                break
+            }
+            publishRemoteClientState()
+        }
+    }
+
+    private func publishRemoteClientState() {
+        guard remoteMonitorAuthenticated else { return }
+        remoteMonitorClient.publishClientState(mode: mode.rawValue, running: isRunning)
     }
 
     private func wireWorkers() {
@@ -596,6 +625,7 @@ final class MainViewModel: ObservableObject {
         liveWorker.onStopped = { [weak self] in
             self?.isRunning = false
             self?.countdowns = [:]
+            self?.publishRemoteClientState()
         }
 
         deadWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
@@ -604,6 +634,7 @@ final class MainViewModel: ObservableObject {
         deadWorker.onStopped = { [weak self] in
             self?.isRunning = false
             self?.countdowns = [:]
+            self?.publishRemoteClientState()
         }
 
         followHealWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
@@ -612,6 +643,7 @@ final class MainViewModel: ObservableObject {
         followHealWorker.onStopped = { [weak self] in
             self?.isRunning = false
             self?.countdowns = [:]
+            self?.publishRemoteClientState()
         }
 
         partyInviteWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
@@ -665,6 +697,7 @@ final class MainViewModel: ObservableObject {
             clearMonitorState(status: reason)
             appendLog(reason)
             syncPartyInviteWorker(logMissingRequirements: false)
+            publishRemoteClientState()
         }
     }
 
@@ -762,7 +795,7 @@ final class MainViewModel: ObservableObject {
 
     /// 用本地图片回放整条符文链路：识别 → 面板提示 → 上报 → 服务端推送。
     ///
-    /// 只在监控运行中可用，因为远程发布通道是随监控一起建立的。
+    /// 只在监控运行中可用，避免把离线图片结果混入正常状态。
     func runRuneAlertImageTest(urls: [URL]) {
         guard !monitorRuneTestBusy else { return }
         guard !urls.isEmpty else {

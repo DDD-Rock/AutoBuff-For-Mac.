@@ -5,17 +5,12 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var viewModel = MainViewModel()
     @State private var workspaceTab: WorkspaceTab = .configuration
-    @AppStorage("mainSidebarExpanded") private var sidebarExpanded = false
     private let windowSelector = WindowSelector()
 
     var body: some View {
-        let usesCompactSidebar = MainWindowLayout.usesCompactSidebar(
-            prefersExpanded: sidebarExpanded
-        )
-
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                sidebar(isCompact: usesCompactSidebar)
+                sidebar
                 Divider().overlay(AppTheme.border)
                 workspace
             }
@@ -145,39 +140,30 @@ struct ContentView: View {
         }
     }
 
-    private func sidebar(isCompact: Bool) -> some View {
+    private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header(isCompact: isCompact)
-                .padding(.horizontal, isCompact ? 12 : 16)
+            header
+                .padding(.horizontal, 8)
                 .padding(.top, 16)
                 .padding(.bottom, 18)
 
-            if !isCompact {
-                Text("工作模式")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .textCase(.uppercase)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 7)
-            }
-
-            modeSelector(isCompact: isCompact)
-                .padding(.horizontal, isCompact ? 8 : 10)
+            modeSelector
+                .padding(.horizontal, 6)
 
             Divider()
                 .overlay(AppTheme.border)
-                .padding(.horizontal, isCompact ? 10 : 16)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 14)
 
-            sidebarStatus(isCompact: isCompact)
-                .padding(.horizontal, isCompact ? 8 : 14)
+            sidebarStatus
+                .padding(.horizontal, 8)
 
             Spacer(minLength: 12)
 
-            sidebarFooter(isCompact: isCompact)
-                .padding(isCompact ? 8 : 14)
+            sidebarFooter
+                .padding(6)
         }
-        .frame(width: isCompact ? 64 : 224)
+        .frame(width: MainWindowLayout.sidebarWidth)
         .background(AppTheme.panel.opacity(0.82))
         .contentShape(Rectangle())
         .onTapGesture { dismissInputFocus() }
@@ -227,6 +213,12 @@ struct ContentView: View {
                 Text(modeDescription)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(AppTheme.textSecondary)
+                if viewModel.remoteMonitorAuthenticated {
+                    Label(viewModel.remoteClientName, systemImage: "desktopcomputer")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(AppTheme.accent)
+                        .lineLimit(1)
+                }
             }
 
             Spacer(minLength: 16)
@@ -335,59 +327,38 @@ struct ContentView: View {
         .background(.ultraThinMaterial)
     }
 
-    private func header(isCompact: Bool) -> some View {
-        HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [AppTheme.accent, Color(red: 0.27, green: 0.62, blue: 1)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+    private var header: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [AppTheme.accent, Color(red: 0.27, green: 0.62, blue: 1)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 38, height: 38)
-            .shadow(color: AppTheme.accent.opacity(0.25), radius: 10, y: 5)
-            .accessibilityIdentifier(isCompact ? "app.title" : "app.logo")
-
-            if !isCompact {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Auto Buff")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(AppTheme.textPrimary)
-                        .accessibilityIdentifier("app.title")
-                    Text("Power by 小新 · v\(AppConstants.appVersion)")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .accessibilityIdentifier("app.subtitle")
-                }
-            }
+                )
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
         }
-        .help(isCompact ? "Auto Buff · v\(AppConstants.appVersion)" : "")
+        .frame(width: 38, height: 38)
+        .shadow(color: AppTheme.accent.opacity(0.25), radius: 10, y: 5)
+        .help("Auto Buff · v\(AppConstants.appVersion)")
+        .accessibilityLabel("Auto Buff")
+        .accessibilityIdentifier("app.title")
     }
 
     private func dismissInputFocus() {
         NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
-    private func sidebarStatus(isCompact: Bool) -> some View {
+    private var sidebarStatus: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !isCompact {
-                Text("系统状态")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(AppTheme.textSecondary)
-            }
-
             if viewModel.mode != .monitor {
                 statusRow(
                     title: "辅助功能",
                     icon: "accessibility",
                     granted: viewModel.accessibilityGranted,
-                    isCompact: isCompact,
                     action: viewModel.requestAccessibility
                 )
             }
@@ -395,25 +366,14 @@ struct ContentView: View {
                 title: "屏幕录制",
                 icon: "rectangle.inset.filled",
                 granted: viewModel.screenRecordingGranted,
-                isCompact: isCompact,
                 action: viewModel.requestScreenRecording
             )
             statusRow(
                 title: "游戏窗口",
                 icon: "macwindow",
                 granted: viewModel.selectedWindow != nil,
-                isCompact: isCompact,
                 action: viewModel.identifyWindow
             )
-
-            if !isCompact, let window = viewModel.selectedWindow {
-                Text("\(window.title)\n\(Int(window.size.width)) × \(Int(window.size.height))")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .padding(.top, 2)
-            }
         }
     }
 
@@ -421,37 +381,19 @@ struct ContentView: View {
         title: String,
         icon: String,
         granted: Bool,
-        isCompact: Bool,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            if isCompact {
-                ZStack(alignment: .bottomTrailing) {
-                    Image(systemName: icon)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .frame(width: 38, height: 32)
-                    Circle()
-                        .fill(granted ? AppTheme.success : AppTheme.warning)
-                        .frame(width: 7, height: 7)
-                        .overlay { Circle().stroke(AppTheme.panel, lineWidth: 2) }
-                        .offset(x: -4, y: -3)
-                }
-            } else {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(granted ? AppTheme.success : AppTheme.warning)
-                        .frame(width: 6, height: 6)
-                    Text(title)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(AppTheme.textSecondary)
-                    Spacer()
-                    Text(granted ? "已就绪" : "需设置")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(granted ? AppTheme.success : AppTheme.warning)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 2)
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .frame(width: 38, height: 32)
+                Circle()
+                    .fill(granted ? AppTheme.success : AppTheme.warning)
+                    .frame(width: 7, height: 7)
+                    .overlay { Circle().stroke(AppTheme.panel, lineWidth: 2) }
+                    .offset(x: -4, y: -3)
             }
         }
         .buttonStyle(.plain)
@@ -459,31 +401,27 @@ struct ContentView: View {
         .accessibilityIdentifier(title == "游戏窗口" ? "window.identify" : "permission.\(title)")
     }
 
-    private func modeSelector(isCompact: Bool) -> some View {
+    private var modeSelector: some View {
         VStack(spacing: 5) {
             modeButton(
                 .deadFlower,
                 icon: "arrow.uturn.backward.circle.fill",
-                subtitle: "释放后进入自由市场",
-                isCompact: isCompact
+                subtitle: "释放后进入自由市场"
             )
             modeButton(
                 .liveFlower,
                 icon: "repeat.circle.fill",
-                subtitle: "在当前地图循环释放",
-                isCompact: isCompact
+                subtitle: "在当前地图循环释放"
             )
             modeButton(
                 .followHeal,
                 icon: "heart.circle.fill",
-                subtitle: "自动补血并回位",
-                isCompact: isCompact
+                subtitle: "自动补血并回位"
             )
             modeButton(
                 .monitor,
                 icon: "map.circle.fill",
-                subtitle: "只读显示实时地图",
-                isCompact: isCompact
+                subtitle: "只读显示实时地图"
             )
         }
     }
@@ -491,8 +429,7 @@ struct ContentView: View {
     private func modeButton(
         _ mode: AppMode,
         icon: String,
-        subtitle: String,
-        isCompact: Bool
+        subtitle: String
     ) -> some View {
         let selected = viewModel.mode == mode
         return Button {
@@ -503,22 +440,8 @@ struct ContentView: View {
                 Image(systemName: icon)
                     .font(.system(size: 19))
                     .foregroundStyle(selected ? AppTheme.accent : AppTheme.textSecondary)
-                if !isCompact {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(mode.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(AppTheme.textPrimary)
-                        Text(subtitle)
-                            .font(.system(size: 9))
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .lineLimit(2)
-                    }
-                    Spacer(minLength: 0)
-                }
             }
-            .padding(.horizontal, isCompact ? 0 : 9)
-            .padding(.vertical, isCompact ? 0 : 8)
-            .frame(maxWidth: .infinity, minHeight: isCompact ? 42 : 46)
+            .frame(maxWidth: .infinity, minHeight: 42)
             .background(selected ? AppTheme.accentSoft : AppTheme.panel)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -532,38 +455,32 @@ struct ContentView: View {
         .accessibilityIdentifier("mode.\(mode.rawValue)")
     }
 
-    private func sidebarFooter(isCompact: Bool) -> some View {
-        VStack(alignment: isCompact ? .center : .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                Button {
-                    viewModel.requestMapTopologyEditor()
-                } label: {
-                    if isCompact {
-                        Image(systemName: "map")
-                    } else {
-                        Label("地图", systemImage: "map")
-                    }
-                }
-                .disabled(viewModel.isRunning)
-                .help("地图")
-
-                if viewModel.mode == .deadFlower {
-                    Button {
-                        Task { await viewModel.requestPortalMarker() }
-                    } label: {
-                        if viewModel.isCheckingPortalMarker {
-                            ProgressView().controlSize(.mini)
-                        } else if isCompact {
-                            Image(systemName: "mappin.and.ellipse")
-                        } else {
-                            Label("传送门", systemImage: "mappin.and.ellipse")
-                        }
-                    }
-                    .disabled(viewModel.isRunning || viewModel.isCheckingPortalMarker)
-                    .help("传送门")
-                }
+    private var sidebarFooter: some View {
+        VStack(alignment: .center, spacing: 9) {
+            Button {
+                viewModel.requestMapTopologyEditor()
+            } label: {
+                Image(systemName: "map")
+                    .frame(width: 40, height: 28)
             }
-            .frame(maxWidth: .infinity)
+            .disabled(viewModel.isRunning)
+            .help("地图")
+
+            if viewModel.mode == .deadFlower {
+                Button {
+                    Task { await viewModel.requestPortalMarker() }
+                } label: {
+                    if viewModel.isCheckingPortalMarker {
+                        ProgressView().controlSize(.mini)
+                            .frame(width: 40, height: 28)
+                    } else {
+                        Image(systemName: "mappin.and.ellipse")
+                            .frame(width: 40, height: 28)
+                    }
+                }
+                .disabled(viewModel.isRunning || viewModel.isCheckingPortalMarker)
+                .help("传送门")
+            }
 
             if !viewModel.screenRecordingGranted
                 || (viewModel.mode != .monitor && !viewModel.accessibilityGranted) {
@@ -574,57 +491,15 @@ struct ContentView: View {
                         viewModel.repairAccessibility()
                     }
                 } label: {
-                    if isCompact {
-                        Image(systemName: "wrench.and.screwdriver")
-                    } else {
-                        Label("修复系统权限", systemImage: "wrench.and.screwdriver")
-                    }
+                    Image(systemName: "wrench.and.screwdriver")
+                        .frame(width: 40, height: 28)
                 }
                 .help("修复系统权限")
             }
-
-            Divider().overlay(AppTheme.border)
-
-            Button(action: toggleSidebar) {
-                if isCompact {
-                    VStack(spacing: 2) {
-                        Image(systemName: "chevron.left.2")
-                            .font(.system(size: 11, weight: .bold))
-                        Text("展开")
-                            .font(.system(size: 9, weight: .semibold))
-                    }
-                    .frame(width: 44, height: 34)
-                } else {
-                    HStack(spacing: 7) {
-                        Image(systemName: "chevron.right.2")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("收起为图标栏")
-                            .font(.system(size: 10, weight: .semibold))
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 9)
-                    .frame(maxWidth: .infinity, minHeight: 34)
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(AppTheme.accent)
-            .background(AppTheme.accentSoft, in: RoundedRectangle(cornerRadius: 9))
-            .overlay {
-                RoundedRectangle(cornerRadius: 9)
-                    .stroke(AppTheme.accent.opacity(0.28))
-            }
-            .help(isCompact ? "向左展开侧栏，右侧工作区保持不动" : "收起为图标栏")
-            .accessibilityIdentifier("sidebar.toggle")
         }
         .font(.system(size: 10, weight: .medium))
         .buttonStyle(.borderless)
         .foregroundStyle(AppTheme.accent)
-    }
-
-    private func toggleSidebar() {
-        // 紧凑与展开状态会替换大量按钮、help 和可访问区域。不要对这次结构变化
-        // 做隐式宽度动画，否则 AppKit 会在动画过程中反复重建窗口 structural regions。
-        sidebarExpanded.toggle()
     }
 
     private var modeDescription: String {

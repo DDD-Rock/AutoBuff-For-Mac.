@@ -3,6 +3,8 @@ import Foundation
 
 private struct RemoteMonitorStoredCredentials: Codable {
     var accessToken: String?
+    var clientID: String?
+    var clientName: String?
 }
 
 struct RemoteMonitorLocalStore {
@@ -58,8 +60,29 @@ struct RemoteMonitorLocalStore {
         try save(credentials)
     }
 
+    func loadOrCreateIdentity() throws -> (id: String, name: String?) {
+        var credentials = load() ?? RemoteMonitorStoredCredentials()
+        if credentials.clientID == nil {
+            credentials.clientID = UUID().uuidString.lowercased()
+            try save(credentials)
+        }
+        return (credentials.clientID!, credentials.clientName)
+    }
+
+    func saveClientName(_ name: String) throws {
+        var credentials = load() ?? RemoteMonitorStoredCredentials()
+        credentials.clientName = name
+        try save(credentials)
+    }
+
     func deleteCredentials() {
         try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    func deleteAccessToken() {
+        guard var credentials = load() else { return }
+        credentials.accessToken = nil
+        try? save(credentials)
     }
 }
 
@@ -170,6 +193,18 @@ private struct RemoteZonePayload: Encodable {
     let detectedAt: Int64
 }
 
+private struct RemoteClientStatePayload: Encodable {
+    let mode: String
+    let running: Bool
+}
+
+private struct RemoteServerMessage: Decodable {
+    let type: String
+    let clientId: String?
+    let name: String?
+    let action: String?
+}
+
 /// 布尔型监控状态（符文提示、安全区越界）的上报节奏。
 ///
 /// 状态一变化就立刻发送，让服务器第一时间知道；状态没变化时按心跳间隔
@@ -191,6 +226,10 @@ enum MonitorStatePublishPolicy {
 final class RemoteMonitorClient {
     private(set) var accessToken: String?
     private(set) var username: String?
+    private(set) var clientID: String?
+    private(set) var clientName: String?
+    var onIdentity: ((String) -> Void)?
+    var onCommand: ((String) -> Void)?
     private var baseURL = ""
     private var socket: URLSessionWebSocketTask?
     private var publisherURL: URL?
@@ -210,6 +249,8 @@ final class RemoteMonitorClient {
     private var pendingZoneMessage: Data?
     private var lastZoneState: Bool?
     private var lastZoneSentAt = ContinuousClock.now
+    private var latestMode = "dead"
+    private var latestRunning = false
 
     func loadStoredAccessToken() async -> String? {
         await Task.detached(priority: .utility) {
@@ -230,6 +271,7 @@ final class RemoteMonitorClient {
         }.value
         accessToken = response.accessToken
         self.username = response.user.username
+        try await prepareLocalIdentity()
         return response.user.username
     }
 
@@ -244,6 +286,7 @@ final class RemoteMonitorClient {
                 authenticated: true
             )
             username = user.username
+            try await prepareLocalIdentity()
             return user.username
         } catch {
             logout()
@@ -260,7 +303,10 @@ final class RemoteMonitorClient {
         }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = "/ws/device"
-        components.query = nil
+        guard let clientID else {
+            throw RemoteMonitorError.invalidResponse
+        }
+        components.queryItems = [URLQueryItem(name: "client_id", value: clientID)]
         components.fragment = nil
         guard let url = components.url else {
             throw RemoteMonitorError.invalidServerURL
@@ -282,17 +328,28 @@ final class RemoteMonitorClient {
         lastMapID = nil
         lastFrameSentAt = .now - .seconds(1)
         task.resume()
-        sendStatus(online: true, message: "本机监控在线")
+        sendStatus(online: true, message: "客户端已连接")
+        publishClientState(mode: latestMode, running: latestRunning)
         Task { [weak self, weak task] in
             guard let self, let task else { return }
             do {
                 while publisherEnabled, socket === task {
-                    _ = try await task.receive()
+                    let message = try await task.receive()
+                    self.handleServerMessage(message)
                 }
             } catch {
                 handlePublisherDisconnected(task)
             }
         }
+    }
+
+    func publishClientState(mode: String, running: Bool) {
+        latestMode = mode
+        latestRunning = running
+        send(
+            type: "client_state",
+            payload: RemoteClientStatePayload(mode: mode, running: running)
+        )
     }
 
     func publish(frame: MonitoringFrame) {
@@ -419,13 +476,49 @@ final class RemoteMonitorClient {
 
     func logout() {
         disconnectPublisher(sendOffline: false)
-        RemoteMonitorLocalStore.shared.deleteCredentials()
+        RemoteMonitorLocalStore.shared.deleteAccessToken()
         accessToken = nil
         username = nil
     }
 
     private func sendStatus(online: Bool, message: String) {
         send(type: "status", payload: RemoteStatusPayload(online: online, message: message))
+    }
+
+    private func prepareLocalIdentity() async throws {
+        let identity = try await Task.detached(priority: .utility) {
+            try RemoteMonitorLocalStore.shared.loadOrCreateIdentity()
+        }.value
+        clientID = identity.id
+        clientName = identity.name
+        if let name = identity.name {
+            onIdentity?(name)
+        }
+    }
+
+    private func handleServerMessage(_ message: URLSessionWebSocketTask.Message) {
+        let data: Data
+        switch message {
+        case .data(let value):
+            data = value
+        case .string(let value):
+            guard let value = value.data(using: .utf8) else { return }
+            data = value
+        @unknown default:
+            return
+        }
+        guard let decoded = try? JSONDecoder().decode(RemoteServerMessage.self, from: data) else {
+            return
+        }
+        if decoded.type == "identity", let name = decoded.name {
+            clientName = name
+            onIdentity?(name)
+            Task.detached(priority: .utility) {
+                try? RemoteMonitorLocalStore.shared.saveClientName(name)
+            }
+        } else if decoded.type == "command", let action = decoded.action {
+            onCommand?(action)
+        }
     }
 
     private func handlePublisherDisconnected(_ task: URLSessionWebSocketTask) {
