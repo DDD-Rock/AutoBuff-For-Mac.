@@ -44,9 +44,9 @@ struct AccountLoginGateView<Content: View>: View {
         .task {
             await restoreLogin()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .autoBuffAccountDidLogout)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .autoBuffAccountDidLogout)) { notification in
             password = ""
-            errorMessage = ""
+            errorMessage = notification.userInfo?["message"] as? String ?? ""
             loginState = .loggedOut
         }
     }
@@ -152,7 +152,7 @@ struct AccountLoginGateView<Content: View>: View {
             loginState = .loggedIn
         } catch {
             loginState = .loggedOut
-            errorMessage = "登录已失效，请重新登录"
+            errorMessage = error.localizedDescription
         }
     }
 

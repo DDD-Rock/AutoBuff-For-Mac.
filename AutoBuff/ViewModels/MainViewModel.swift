@@ -546,14 +546,18 @@ final class MainViewModel: ObservableObject {
         saveSettings()
     }
 
-    func logoutRemoteMonitor() {
-        if isRunning && mode == .monitor {
+    func logoutRemoteMonitor(message: String = "已退出远程监控账号") {
+        if isRunning {
             stopWorker()
         }
         remoteMonitorClient.logout()
         remoteMonitorAuthenticated = false
-        remoteMonitorAuthStatus = "已退出远程监控账号"
-        NotificationCenter.default.post(name: .autoBuffAccountDidLogout, object: nil)
+        remoteMonitorAuthStatus = message
+        NotificationCenter.default.post(
+            name: .autoBuffAccountDidLogout,
+            object: nil,
+            userInfo: ["message": message]
+        )
     }
 
     func openRemoteMonitorPage() {
@@ -606,6 +610,10 @@ final class MainViewModel: ObservableObject {
                     appendLog("收到网页远程停止指令")
                     stopWorker()
                 }
+            case "unbind":
+                appendLog("当前客户端已被管理员解绑，正在退出登录")
+                logoutRemoteMonitor(message: "当前客户端已被管理员解绑，请重新登录")
+                return
             default:
                 break
             }

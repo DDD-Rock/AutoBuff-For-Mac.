@@ -118,6 +118,16 @@ private struct RemoteAuthResponse: Decodable {
     let user: RemoteUser
 }
 
+private struct RemoteClientBindRequest: Encodable {
+    let clientId: String
+}
+
+private struct RemoteClientBindResponse: Decodable {
+    let id: String
+    let clientId: String
+    let name: String
+}
+
 private struct RemoteAPIError: Decodable {
     let message: String
 }
@@ -266,13 +276,21 @@ final class RemoteMonitorClient {
             body: RemoteAuthRequest(username: username, password: password),
             authenticated: false
         )
-        try await Task.detached(priority: .utility) {
-            try RemoteMonitorLocalStore.shared.saveToken(response.accessToken)
-        }.value
         accessToken = response.accessToken
         self.username = response.user.username
-        try await prepareLocalIdentity()
-        return response.user.username
+        do {
+            try await prepareLocalIdentity()
+            try await bindCurrentClient()
+            try await Task.detached(priority: .utility) {
+                try RemoteMonitorLocalStore.shared.saveToken(response.accessToken)
+            }.value
+            return response.user.username
+        } catch {
+            RemoteMonitorLocalStore.shared.deleteAccessToken()
+            accessToken = nil
+            self.username = nil
+            throw error
+        }
     }
 
     func restore(baseURL: String, storedToken: String) async throws -> String {
@@ -287,6 +305,7 @@ final class RemoteMonitorClient {
             )
             username = user.username
             try await prepareLocalIdentity()
+            try await validateCurrentClient()
             return user.username
         } catch {
             logout()
@@ -496,6 +515,52 @@ final class RemoteMonitorClient {
         }
     }
 
+    private func bindCurrentClient() async throws {
+        guard let clientID else {
+            throw RemoteMonitorError.invalidResponse
+        }
+        let response: RemoteClientBindResponse = try await request(
+            path: "/api/clients/bind",
+            method: "POST",
+            body: RemoteClientBindRequest(clientId: clientID),
+            authenticated: true
+        )
+        clientName = response.name
+        onIdentity?(response.name)
+        try await Task.detached(priority: .utility) {
+            try RemoteMonitorLocalStore.shared.saveClientName(response.name)
+        }.value
+    }
+
+    private func validateCurrentClient() async throws {
+        guard let clientID,
+              var components = URLComponents(string: baseURL + "/api/clients/authorization")
+        else {
+            throw RemoteMonitorError.invalidResponse
+        }
+        components.queryItems = [URLQueryItem(name: "client_id", value: clientID)]
+        guard let url = components.url else {
+            throw RemoteMonitorError.invalidServerURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let accessToken else {
+            throw RemoteMonitorError.notAuthenticated
+        }
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RemoteMonitorError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let apiError = try? JSONDecoder().decode(RemoteAPIError.self, from: data)
+            throw RemoteMonitorError.server(
+                apiError?.message ?? "客户端授权检查失败（\(httpResponse.statusCode)）"
+            )
+        }
+    }
+
     private func handleServerMessage(_ message: URLSessionWebSocketTask.Message) {
         let data: Data
         switch message {
@@ -511,6 +576,9 @@ final class RemoteMonitorClient {
             return
         }
         if decoded.type == "identity", let name = decoded.name {
+            // The server identity confirms that the reconnect completed.
+            // A later transient failure should restart at the shortest delay.
+            reconnectAttempt = 0
             clientName = name
             onIdentity?(name)
             Task.detached(priority: .utility) {
