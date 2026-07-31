@@ -47,7 +47,7 @@ struct AutoBuffApp: App {
             } else {
                 Text("AutoBuff 需要 macOS 14.0 或更高版本")
                     .padding()
-            }
+            } 
         }
         .defaultSize(
             width: MainWindowLayout.preferredContentWidth,
