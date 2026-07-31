@@ -1441,6 +1441,82 @@ struct SettingsManagerTests {
         }
     }
 
+    @Test func minimapWhiteFrameExcludesScaledVerticalBorders() throws {
+        let width = 1_355
+        let height = 882
+        let frameLeft = 0
+        let frameTop = 29
+        let frameRight = 181
+        let frameBottom = 243
+        let dividerTop = 115
+        let dividerBottom = 118
+        let bottomBorderTop = 240
+        let expectedLeft = 5
+        let expectedRightExclusive = 177
+        let expectedTop = dividerBottom + 1
+        let expectedBottomExclusive = bottomBorderTop
+        var data = [UInt8](repeating: 110, count: width * height * 3)
+
+        func setBGR(x: Int, y: Int, b: UInt8, g: UInt8, r: UInt8) {
+            let index = (y * width + x) * 3
+            data[index] = b
+            data[index + 1] = g
+            data[index + 2] = r
+        }
+        func setGray(x: Int, y: Int, value: UInt8) {
+            setBGR(x: x, y: y, b: value, g: value, r: value)
+        }
+        func fillHorizontalBand(from startY: Int, through endY: Int) {
+            for y in startY...endY {
+                for x in frameLeft...frameRight {
+                    setGray(x: x, y: y, value: 230)
+                }
+            }
+        }
+
+        fillHorizontalBand(from: frameTop, through: frameTop + 2)
+        fillHorizontalBand(from: dividerTop, through: dividerBottom)
+        fillHorizontalBand(from: bottomBorderTop, through: frameBottom)
+        for y in frameTop...frameBottom {
+            for x in frameLeft..<expectedLeft {
+                setGray(x: x, y: y, value: 230)
+            }
+            for x in expectedRightExclusive...frameRight {
+                setGray(x: x, y: y, value: 230)
+            }
+        }
+        for y in expectedTop..<expectedBottomExclusive {
+            for x in expectedLeft..<expectedRightExclusive {
+                setGray(x: x, y: y, value: 24)
+            }
+        }
+        for y in (expectedTop + 35)..<(expectedTop + 39) {
+            for x in (expectedLeft + 70)..<(expectedLeft + 74) {
+                setBGR(x: x, y: y, b: 0, g: 235, r: 255)
+            }
+        }
+
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+        let result = ColorDetector.detectMinimapRegion(in: image)
+        let rect = try #require(result.rect)
+        let content = try #require(
+            image.cropped(
+                x: Int(rect.minX),
+                y: Int(rect.minY),
+                width: Int(rect.width),
+                height: Int(rect.height)
+            )
+        )
+        let validation = ColorDetector.validateMinimapContent(in: content)
+
+        #expect(Int(rect.minX) == expectedLeft)
+        #expect(Int(rect.maxX) == expectedRightExclusive)
+        #expect(Int(rect.minY) == expectedTop)
+        #expect(Int(rect.maxY) == expectedBottomExclusive)
+        #expect(validation.isValid)
+        #expect(validation.maximumBrightEdgeRatio < 0.25)
+    }
+
     @Test func mapTopologyPersistsAndValidatesRopeConnection() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)

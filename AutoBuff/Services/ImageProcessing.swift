@@ -1055,7 +1055,10 @@ enum ColorDetector {
         let panelHeight = Int(frame.height)
         guard panelWidth >= 100, panelHeight >= 110 else { return nil }
 
-        let horizontalInset = max(3, Int((Double(panelWidth) * 0.018).rounded()))
+        let fallbackHorizontalInset = max(
+            3,
+            Int((Double(panelWidth) * 0.018).rounded())
+        )
         let frameLeft = Int(frame.minX)
         let frameTop = Int(frame.minY)
         let frameRight = Int(frame.maxX) - 1
@@ -1092,16 +1095,76 @@ enum ColorDetector {
             ?? frameTop + Int((Double(panelWidth) * 0.38).rounded())
         let contentBottomExclusive = bottomBorder?.start
             ?? frameBottom - max(5, Int((Double(panelWidth) * 0.059).rounded())) + 1
-        let contentWidth = panelWidth - horizontalInset * 2
+        let horizontalBounds = minimapHorizontalContentBounds(
+            in: image,
+            frameLeft: frameLeft,
+            frameTop: frameTop,
+            frameRight: frameRight,
+            frameBottom: frameBottom,
+            fallbackInset: fallbackHorizontalInset
+        )
+        let contentWidth = horizontalBounds.rightExclusive - horizontalBounds.left
         let contentHeight = contentBottomExclusive - contentTop
         guard contentWidth >= 70, contentHeight >= 45 else { return nil }
 
         return CGRect(
-            x: frameLeft + horizontalInset,
+            x: horizontalBounds.left,
             y: contentTop,
             width: contentWidth,
             height: contentHeight
         )
+    }
+
+    private static func minimapHorizontalContentBounds(
+        in image: ImageBuffer,
+        frameLeft: Int,
+        frameTop: Int,
+        frameRight: Int,
+        frameBottom: Int,
+        fallbackInset: Int
+    ) -> (left: Int, rightExclusive: Int) {
+        let fallbackLeft = frameLeft + fallbackInset
+        let fallbackRightExclusive = frameRight - fallbackInset + 1
+        let maximumProbe = max(
+            8,
+            Int((Double(frameRight - frameLeft + 1) * 0.08).rounded())
+        )
+        let leftProbeEnd = min(frameRight, frameLeft + maximumProbe)
+        let rightProbeStart = max(frameLeft, frameRight - maximumProbe)
+        let frameSupportThreshold = 0.50
+        let interiorSupportThreshold = 0.35
+        func verticalBrightSupport(at x: Int) -> Double {
+            brightPixelRatio(
+                in: image,
+                minX: x,
+                minY: frameTop,
+                maxX: x,
+                maxY: frameBottom
+            )
+        }
+
+        // The game's vertical frame thickness changes with UI scale. Detect
+        // the sharp transition from its narrow, continuously bright column
+        // band into the map interior. A bright map may have high support over
+        // many columns, but it does not create this transition beside the
+        // outer panel edge.
+        let detectedLeftBorder = (frameLeft..<leftProbeEnd).last {
+            verticalBrightSupport(at: $0) >= frameSupportThreshold
+                && verticalBrightSupport(at: $0 + 1) < interiorSupportThreshold
+        }
+        let detectedRightBorder = ((rightProbeStart + 1)...frameRight).first {
+            verticalBrightSupport(at: $0) >= frameSupportThreshold
+                && verticalBrightSupport(at: $0 - 1) < interiorSupportThreshold
+        }
+
+        let measuredLeft = detectedLeftBorder.map { $0 + 1 } ?? fallbackLeft
+        let measuredRightExclusive = detectedRightBorder ?? fallbackRightExclusive
+        let left = max(fallbackLeft, measuredLeft)
+        let rightExclusive = min(fallbackRightExclusive, measuredRightExclusive)
+        guard rightExclusive - left >= 70 else {
+            return (fallbackLeft, fallbackRightExclusive)
+        }
+        return (left, rightExclusive)
     }
 
     private static func fullWidthBrightBands(

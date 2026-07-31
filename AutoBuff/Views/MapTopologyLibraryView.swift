@@ -280,8 +280,9 @@ struct MapTopologyLibraryView: View {
             }
             try Task.checkCancellation()
             let firstFrame = try await monitor.captureMinimap()
-            guard ColorDetector.validateMinimapContent(in: firstFrame).isValid else {
-                status = "当前小地图纯内容区校验失败"; return
+            let validation = ColorDetector.validateMinimapContent(in: firstFrame)
+            guard validation.isValid else {
+                status = "当前小地图纯内容区校验失败：\(validation.summary)"; return
             }
             let sampleCount = 12
             var frames = [firstFrame]

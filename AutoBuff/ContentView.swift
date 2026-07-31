@@ -49,7 +49,9 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $viewModel.showWindowPicker) {
-            WindowPickerView(windows: windowSelector.getAllWindows()) { window in
+            WindowPickerView(
+                loadWindows: { windowSelector.getAllWindows() }
+            ) { window in
                 viewModel.selectWindow(window)
                 viewModel.appendLog("已选择窗口: \(window.title)")
             }

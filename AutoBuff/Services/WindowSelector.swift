@@ -14,8 +14,16 @@ struct GameWindowInfo: Identifiable, Equatable {
 }
 
 final class WindowSelector {
+    /// Do not restrict discovery to the current Space. Opening AutoBuff from a
+    /// full-screen game switches Spaces, so `.optionOnScreenOnly` would hide
+    /// the very window the user is trying to select.
+    static let discoveryOptions: CGWindowListOption = [.excludeDesktopElements]
+
     func getAllWindows(minSize: CGSize = CGSize(width: 100, height: 100)) -> [GameWindowInfo] {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        guard let list = CGWindowListCopyWindowInfo(
+            Self.discoveryOptions,
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
             return []
         }
         let windows = list.compactMap {
@@ -27,8 +35,23 @@ final class WindowSelector {
     func autoDetectGameWindow(prefix: String = AppConstants.gameWindowTitlePrefix) -> GameWindowInfo? {
         getAllWindows().first {
             $0.title.localizedCaseInsensitiveContains(prefix)
-                || $0.ownerName.localizedCaseInsensitiveContains("MapleStory Worlds")
+                || Self.isKnownGameOwner($0.ownerName)
         }
+    }
+
+    static func pickerTitle(rawTitle: String, ownerName: String) -> String? {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty {
+            return title
+        }
+        guard isKnownGameOwner(ownerName) else {
+            return nil
+        }
+        return ownerName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isKnownGameOwner(_ ownerName: String) -> Bool {
+        ownerName.localizedCaseInsensitiveContains("MapleStory Worlds")
     }
     
     func getWindowInfo(windowID: CGWindowID) -> GameWindowInfo? {
@@ -96,11 +119,20 @@ final class WindowSelector {
               let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary) else {
             return nil
         }
-        let title = info[kCGWindowName as String] as? String ?? ""
-        if requireTitle && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return nil
-        }
+        let rawTitle = info[kCGWindowName as String] as? String ?? ""
         let owner = info[kCGWindowOwnerName as String] as? String ?? ""
+        let title: String
+        if requireTitle {
+            guard let pickerTitle = Self.pickerTitle(
+                rawTitle: rawTitle,
+                ownerName: owner
+            ) else {
+                return nil
+            }
+            title = pickerTitle
+        } else {
+            title = rawTitle
+        }
         let layer = info[kCGWindowLayer as String] as? Int ?? 0
         let alpha = info[kCGWindowAlpha as String] as? Double ?? 1
         guard layer == 0, alpha > 0,
