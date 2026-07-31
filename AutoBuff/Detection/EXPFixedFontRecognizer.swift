@@ -27,6 +27,32 @@ enum EXPValueFormatter {
     }
 }
 
+enum EXPLayoutScaleSearch {
+    static func candidates(anchorScale: Double) -> [Double] {
+        let roundedAnchor = (anchorScale / 0.05).rounded() * 0.05
+        let rawCandidates = [
+            anchorScale,
+            roundedAnchor,
+            1.0,
+            roundedAnchor - 0.10,
+            roundedAnchor - 0.05,
+            roundedAnchor + 0.05,
+            roundedAnchor + 0.10,
+        ]
+        var seen = Set<Int>()
+        return rawCandidates.compactMap { rawScale in
+            let scale = max(0.5, min(2.0, rawScale))
+            let key = Int((scale * 100).rounded())
+            guard seen.insert(key).inserted else { return nil }
+            return Double(key) / 100
+        }
+    }
+
+    static func horizontalOffsets(layoutScale: Double) -> ClosedRange<Int> {
+        -4...4
+    }
+}
+
 struct EXPRecognitionStabilizer {
     let requiredMatches: Int
     let toleratedMisses: Int
@@ -84,12 +110,13 @@ enum EXPFixedFontRecognizer {
         if frame.width == canonicalWidth, frame.height == canonicalHeight {
             return recognizeCanonical(panel: frame, templates: templates)
         }
+        let pixels = EXPLuminanceImage(image: frame)
         if let anchor = EXPPanelLocator.locateNearbyAnchor(
             in: frame,
             template: templates.anchorImage
         ), let reading = recognizeScaled(
-            frame: frame,
             anchor: anchor,
+            pixels: pixels,
             templates: templates
         ) {
             return reading
@@ -101,8 +128,8 @@ enum EXPFixedFontRecognizer {
             return nil
         }
         return recognizeScaled(
-            frame: frame,
             anchor: fallbackAnchor,
+            pixels: pixels,
             templates: templates
         )
     }
@@ -166,7 +193,7 @@ enum EXPFixedFontRecognizer {
         let fractionStartX = dotX + 3
         guard let fractionLength = bestSlot(
             template: templates.percent,
-            counts: 1...4,
+            counts: 2...2,
             x: { fractionStartX + $0 * 7 },
             y: textY,
             in: pixels
@@ -214,86 +241,139 @@ enum EXPFixedFontRecognizer {
     }
 
     private static func recognizeScaled(
-        frame: ImageBuffer,
         anchor: EXPAnchorMatch,
+        pixels: EXPLuminanceImage,
         templates: EXPFixedFontTemplateLibrary
     ) -> EXPRecognitionResult? {
-        let pixels = EXPLuminanceImage(image: frame)
-        let scaled = EXPScaledTemplateLibrary(
+        let anchorScaledTemplates = EXPScaledTemplateLibrary(
             source: templates,
             scale: anchor.scale
         )
+        if let originalLayoutReading = recognizeScaledLayout(
+            anchor: anchor,
+            layoutScale: anchor.scale,
+            horizontalOffset: 0,
+            pixels: pixels,
+            templates: anchorScaledTemplates
+        ) {
+            return originalLayoutReading
+        }
+
+        var best: (
+            reading: EXPRecognitionResult,
+            selectionScore: Double
+        )?
+        for layoutScale in EXPLayoutScaleSearch.candidates(anchorScale: anchor.scale) {
+            let scaled = EXPScaledTemplateLibrary(
+                source: templates,
+                scale: layoutScale
+            )
+            for horizontalOffset in EXPLayoutScaleSearch.horizontalOffsets(
+                layoutScale: layoutScale
+            ) {
+                guard let reading = recognizeScaledLayout(
+                    anchor: anchor,
+                    layoutScale: layoutScale,
+                    horizontalOffset: horizontalOffset,
+                    pixels: pixels,
+                    templates: scaled
+                ) else {
+                    continue
+                }
+                let selectionScore = reading.confidence
+                    - abs(layoutScale - anchor.scale) * 0.30
+                    - Double(abs(horizontalOffset)) * 0.012
+                if best == nil || selectionScore > best!.selectionScore {
+                    best = (
+                        reading,
+                        selectionScore
+                    )
+                }
+            }
+        }
+        return best?.reading
+    }
+
+    private static func recognizeScaledLayout(
+        anchor: EXPAnchorMatch,
+        layoutScale: Double,
+        horizontalOffset: Int,
+        pixels: EXPLuminanceImage,
+        templates scaled: EXPScaledTemplateLibrary
+    ) -> EXPRecognitionResult? {
         let textY = anchor.y
-        let digitStartX = anchor.x + Int((33 * anchor.scale).rounded())
+        let digitStartX = anchor.x
+            + Int((33 * layoutScale).rounded())
+            + horizontalOffset
 
         guard let currentLength = bestScaledSlot(
             template: scaled.leftParenthesis,
             counts: 1...10,
-            x: { digitStartX + Int((Double($0 * 7) * anchor.scale).rounded()) },
+            x: { digitStartX + Int((Double($0 * 7) * layoutScale).rounded()) },
             y: textY,
             in: pixels
-        ), currentLength.score >= 0.48,
-              let current = readScaledDigits(
-                count: currentLength.count,
-                startX: digitStartX,
-                y: textY,
-                scale: anchor.scale,
-                pixels: pixels,
-                templates: scaled
-              ) else {
+        ), currentLength.score >= 0.48 else {
             return nil
         }
 
         let leftParenthesisX = digitStartX
-            + Int((Double(currentLength.count * 7) * anchor.scale).rounded())
-        let percentStartX = leftParenthesisX + Int((4 * anchor.scale).rounded())
+            + Int((Double(currentLength.count * 7) * layoutScale).rounded())
+        let percentStartX = leftParenthesisX + Int((4 * layoutScale).rounded())
         guard let integerLength = bestScaledSlot(
             template: scaled.dot,
             counts: 1...3,
-            x: { percentStartX + Int((Double($0 * 7) * anchor.scale).rounded()) },
+            x: { percentStartX + Int((Double($0 * 7) * layoutScale).rounded()) },
             y: textY,
             in: pixels
-        ), integerLength.score >= 0.45,
-              let percentageInteger = readScaledDigits(
-                count: integerLength.count,
-                startX: percentStartX,
-                y: textY,
-                scale: anchor.scale,
-                pixels: pixels,
-                templates: scaled
-              ) else {
+        ), integerLength.score >= 0.45 else {
             return nil
         }
 
         let dotX = percentStartX
-            + Int((Double(integerLength.count * 7) * anchor.scale).rounded())
-        let fractionStartX = dotX + Int((3 * anchor.scale).rounded())
+            + Int((Double(integerLength.count * 7) * layoutScale).rounded())
+        let fractionStartX = dotX + Int((3 * layoutScale).rounded())
         guard let fractionLength = bestScaledSlot(
             template: scaled.percent,
-            counts: 1...4,
-            x: { fractionStartX + Int((Double($0 * 7) * anchor.scale).rounded()) },
+            counts: 2...2,
+            x: { fractionStartX + Int((Double($0 * 7) * layoutScale).rounded()) },
             y: textY,
             in: pixels
-        ), fractionLength.score >= 0.45,
-              let percentageFraction = readScaledDigits(
-                count: fractionLength.count,
-                startX: fractionStartX,
-                y: textY,
-                scale: anchor.scale,
-                pixels: pixels,
-                templates: scaled
-              ) else {
+        ), fractionLength.score >= 0.45 else {
             return nil
         }
 
         let percentX = fractionStartX
-            + Int((Double(fractionLength.count * 7) * anchor.scale).rounded())
+            + Int((Double(fractionLength.count * 7) * layoutScale).rounded())
         let rightParenthesisScore = pixels.bestScore(
             template: scaled.rightParenthesis,
-            x: percentX + Int((16 * anchor.scale).rounded()),
+            x: percentX + Int((16 * layoutScale).rounded()),
             y: textY
         )
         guard rightParenthesisScore >= 0.42,
+              let current = readScaledDigits(
+                count: currentLength.count,
+                startX: digitStartX,
+                y: textY,
+                scale: layoutScale,
+                pixels: pixels,
+                templates: scaled
+              ),
+              let percentageInteger = readScaledDigits(
+                count: integerLength.count,
+                startX: percentStartX,
+                y: textY,
+                scale: layoutScale,
+                pixels: pixels,
+                templates: scaled
+              ),
+              let percentageFraction = readScaledDigits(
+                count: fractionLength.count,
+                startX: fractionStartX,
+                y: textY,
+                scale: layoutScale,
+                pixels: pixels,
+                templates: scaled
+              ),
               let currentEXP = Int(current.text),
               let percent = Double("\(percentageInteger.text).\(percentageFraction.text)"),
               (0...100).contains(percent) else {

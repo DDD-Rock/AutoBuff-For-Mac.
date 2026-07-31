@@ -54,6 +54,34 @@ struct EXPFixedFontRecognizerTests {
         #expect(reading.percent == 90.01)
     }
 
+    @Test func recognizesNativeLayoutInsideWideGameCapture() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "Fixtures/EXP/exp_1355x882_78660262_11_99.png"
+            )
+        let crop = try #require(loadImage(fixtureURL))
+        var frame = ImageBuffer(
+            width: 1_355,
+            height: 882,
+            bgr: [UInt8](repeating: 18, count: 1_355 * 882 * 3)
+        )
+        pasteAllPixels(crop, into: &frame, x: 710, y: 820)
+
+        let reading = try #require(EXPFixedFontRecognizer.recognize(in: frame))
+
+        #expect(reading.currentEXP == 78_660_262)
+        #expect(reading.percent == 11.99)
+    }
+
+    @Test func includesNativeLayoutWhenAnchorSuggestsLargerScale() {
+        let candidates = EXPLayoutScaleSearch.candidates(anchorScale: 1.15)
+
+        #expect(candidates.contains(1.0))
+        #expect(candidates.contains(1.15))
+        #expect(EXPLayoutScaleSearch.horizontalOffsets(layoutScale: 1.0).contains(4))
+    }
+
     @Test func stabilizesTwoFramesAndToleratesShortOcclusion() throws {
         let reading = EXPRecognitionResult(
             currentEXP: 6_528,
@@ -209,6 +237,28 @@ struct EXPFixedFontRecognizerTests {
                 pixels[destinationIndex + 1] = 255
                 pixels[destinationIndex + 2] = 255
             }
+        }
+        destination = ImageBuffer(
+            width: destination.width,
+            height: destination.height,
+            bgr: pixels
+        )
+    }
+
+    private func pasteAllPixels(
+        _ source: ImageBuffer,
+        into destination: inout ImageBuffer,
+        x: Int,
+        y: Int
+    ) {
+        var pixels = destination.bgr
+        for row in 0..<source.height {
+            let sourceStart = row * source.width * 3
+            let destinationStart = ((y + row) * destination.width + x) * 3
+            pixels.replaceSubrange(
+                destinationStart..<(destinationStart + source.width * 3),
+                with: source.bgr[sourceStart..<(sourceStart + source.width * 3)]
+            )
         }
         destination = ImageBuffer(
             width: destination.width,
