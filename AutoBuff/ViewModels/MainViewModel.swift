@@ -46,6 +46,7 @@ final class MainViewModel: ObservableObject {
     @Published var monitorRuneTestSummary = ""
     @Published var monitorZoneOutside = false
     @Published var remoteMonitorAuthenticated = false
+    @Published var remoteMonitorIsSuperAdmin = false
     @Published var remoteMonitorAuthStatus = "未登录远程监控账号"
     @Published var remoteClientName = "正在分配客户端名称"
 
@@ -552,6 +553,7 @@ final class MainViewModel: ObservableObject {
         }
         remoteMonitorClient.logout()
         remoteMonitorAuthenticated = false
+        remoteMonitorIsSuperAdmin = false
         remoteMonitorAuthStatus = message
         NotificationCenter.default.post(
             name: .autoBuffAccountDidLogout,
@@ -583,14 +585,28 @@ final class MainViewModel: ObservableObject {
             )
             settings.monitorAccountUsername = account
             remoteMonitorAuthenticated = true
+            remoteMonitorIsSuperAdmin = remoteMonitorClient.isSuperAdmin
             try remoteMonitorClient.connectPublisher()
             publishRemoteClientState()
             remoteMonitorAuthStatus = "已登录 · 客户端管理通道已连接"
         } catch {
             remoteMonitorAuthenticated = false
+            remoteMonitorIsSuperAdmin = false
             remoteMonitorAuthStatus = "登录已失效，请重新登录"
             NotificationCenter.default.post(name: .autoBuffAccountDidLogout, object: nil)
         }
+    }
+
+    func listCloudMaps() async throws -> [CloudMapSummary] {
+        try await remoteMonitorClient.listCloudMaps()
+    }
+
+    func uploadCloudMaps(_ maps: [MapTopology]) async throws -> Int {
+        try await remoteMonitorClient.uploadCloudMaps(maps)
+    }
+
+    func downloadCloudMap(id: Int64) async throws -> [MapTopology] {
+        try await remoteMonitorClient.downloadCloudMap(id: id)
     }
 
     private func wireRemoteMonitor() {

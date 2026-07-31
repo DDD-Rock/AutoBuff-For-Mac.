@@ -110,6 +110,7 @@ private struct RemoteAuthRequest: Encodable {
 private struct RemoteUser: Codable {
     let id: Int64
     let username: String
+    let isSuperAdmin: Bool?
 }
 
 private struct RemoteAuthResponse: Decodable {
@@ -131,6 +132,18 @@ private struct RemoteClientBindResponse: Decodable {
 private struct RemoteAPIError: Decodable {
     let message: String
 }
+
+struct CloudMapSummary: Codable, Identifiable, Equatable {
+    let id: Int64
+    let name: String
+    let size: Int
+    let updatedAt: Int64
+    let uploadedBy: String
+}
+
+private struct CloudMapListResponse: Decodable { let maps: [CloudMapSummary] }
+private struct CloudMapDownloadResponse: Decodable { let maps: [MapTopology] }
+private struct CloudMapUploadResponse: Decodable { let uploadedCount: Int }
 
 private struct RemoteEnvelope<Payload: Encodable>: Encodable {
     let type: String
@@ -238,6 +251,7 @@ final class RemoteMonitorClient {
     private(set) var username: String?
     private(set) var clientID: String?
     private(set) var clientName: String?
+    private(set) var isSuperAdmin = false
     var onIdentity: ((String) -> Void)?
     var onCommand: ((String) -> Void)?
     private var baseURL = ""
@@ -278,6 +292,7 @@ final class RemoteMonitorClient {
         )
         accessToken = response.accessToken
         self.username = response.user.username
+        isSuperAdmin = response.user.isSuperAdmin ?? false
         do {
             try await prepareLocalIdentity()
             try await bindCurrentClient()
@@ -289,6 +304,7 @@ final class RemoteMonitorClient {
             RemoteMonitorLocalStore.shared.deleteAccessToken()
             accessToken = nil
             self.username = nil
+            isSuperAdmin = false
             throw error
         }
     }
@@ -304,6 +320,7 @@ final class RemoteMonitorClient {
                 authenticated: true
             )
             username = user.username
+            isSuperAdmin = user.isSuperAdmin ?? false
             try await prepareLocalIdentity()
             try await validateCurrentClient()
             return user.username
@@ -498,6 +515,31 @@ final class RemoteMonitorClient {
         RemoteMonitorLocalStore.shared.deleteAccessToken()
         accessToken = nil
         username = nil
+        isSuperAdmin = false
+    }
+
+    func listCloudMaps() async throws -> [CloudMapSummary] {
+        let response: CloudMapListResponse = try await request(
+            path: "/api/admin/maps", method: "GET",
+            body: Optional<String>.none, authenticated: true
+        )
+        return response.maps
+    }
+
+    func uploadCloudMaps(_ maps: [MapTopology]) async throws -> Int {
+        let response: CloudMapUploadResponse = try await request(
+            path: "/api/admin/maps", method: "POST",
+            body: MapTransferPackage(maps: maps), authenticated: true
+        )
+        return response.uploadedCount
+    }
+
+    func downloadCloudMap(id: Int64) async throws -> [MapTopology] {
+        let response: CloudMapDownloadResponse = try await request(
+            path: "/api/admin/maps/\(id)", method: "GET",
+            body: Optional<String>.none, authenticated: true
+        )
+        return response.maps
     }
 
     private func sendStatus(online: Bool, message: String) {

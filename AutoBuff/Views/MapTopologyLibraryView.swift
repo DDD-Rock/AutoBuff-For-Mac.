@@ -8,7 +8,11 @@ struct MapTopologyLibraryView: View {
     let initialMaps: [MapTopology]
     let jumpKey: String
     let allowsInputActions: Bool
+    let cloudAccess: Bool
     let onSave: ([MapTopology]) -> Void
+    let listCloudMaps: () async throws -> [CloudMapSummary]
+    let uploadCloudMaps: ([MapTopology]) async throws -> Int
+    let downloadCloudMap: (Int64) async throws -> [MapTopology]
 
     @Environment(\.dismiss) private var dismiss
     @State private var maps: [MapTopology]
@@ -29,19 +33,29 @@ struct MapTopologyLibraryView: View {
     @State private var exportFilename = "AutoBuff-地图备份"
     @State private var transferStatus: String?
     @State private var transferAlert: MapTransferAlert?
+    @State private var showsCloudLibrary = false
+    @State private var cloudBusy = false
 
     init(
         windowID: CGWindowID,
         maps: [MapTopology],
         jumpKey: String,
         allowsInputActions: Bool = true,
-        onSave: @escaping ([MapTopology]) -> Void
+        cloudAccess: Bool = false,
+        onSave: @escaping ([MapTopology]) -> Void,
+        listCloudMaps: @escaping () async throws -> [CloudMapSummary] = { [] },
+        uploadCloudMaps: @escaping ([MapTopology]) async throws -> Int = { _ in 0 },
+        downloadCloudMap: @escaping (Int64) async throws -> [MapTopology] = { _ in [] }
     ) {
         self.windowID = windowID
         self.initialMaps = maps
         self.jumpKey = jumpKey
         self.allowsInputActions = allowsInputActions
+        self.cloudAccess = cloudAccess
         self.onSave = onSave
+        self.listCloudMaps = listCloudMaps
+        self.uploadCloudMaps = uploadCloudMaps
+        self.downloadCloudMap = downloadCloudMap
         _maps = State(initialValue: maps)
         _selectedName = State(initialValue: maps.first?.mapName ?? "")
     }
@@ -111,6 +125,16 @@ struct MapTopologyLibraryView: View {
                             showsExportSelection = true
                         }
                         .disabled(maps.isEmpty)
+                        if cloudAccess {
+                            Button("上传云端", systemImage: "icloud.and.arrow.up") {
+                                uploadAllMaps()
+                            }
+                            .disabled(maps.isEmpty || cloudBusy)
+                            Button("云端下载", systemImage: "icloud.and.arrow.down") {
+                                showsCloudLibrary = true
+                            }
+                            .disabled(cloudBusy)
+                        }
                     }
 
                     Divider()
@@ -193,6 +217,14 @@ struct MapTopologyLibraryView: View {
                 showsImportConflicts: true
             ) { selectedMaps in
                 applyImport(selectedMaps)
+            }
+        }
+        .sheet(isPresented: $showsCloudLibrary) {
+            CloudMapLibraryView(
+                listMaps: listCloudMaps,
+                downloadMap: downloadCloudMap
+            ) { downloaded in
+                applyImport(downloaded)
             }
         }
         .fileImporter(
@@ -326,6 +358,20 @@ struct MapTopologyLibraryView: View {
         }
     }
 
+    private func uploadAllMaps() {
+        guard cloudAccess, !cloudBusy, !maps.isEmpty else { return }
+        cloudBusy = true
+        Task {
+            defer { cloudBusy = false }
+            do {
+                let count = try await uploadCloudMaps(maps)
+                transferStatus = "已上传 \(count) 张地图到云端"
+            } catch {
+                showTransferError(title: "地图上传失败", error: error)
+            }
+        }
+    }
+
     private func handleExportResult(_ result: Result<URL, Error>) {
         defer { exportDocument = nil }
         switch result {
@@ -401,6 +447,79 @@ struct MapTopologyLibraryView: View {
     }
 
     private func persist() { onSave(maps) }
+}
+
+@available(macOS 14.0, *)
+private struct CloudMapLibraryView: View {
+    let listMaps: () async throws -> [CloudMapSummary]
+    let downloadMap: (Int64) async throws -> [MapTopology]
+    let onDownload: ([MapTopology]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var items: [CloudMapSummary] = []
+    @State private var selectedID: Int64?
+    @State private var isLoading = true
+    @State private var errorMessage = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("云端地图").font(.title2.bold())
+            if isLoading {
+                ProgressView("正在读取云端地图列表…")
+            } else if !errorMessage.isEmpty {
+                Text(errorMessage).foregroundStyle(AppTheme.danger)
+            } else if items.isEmpty {
+                Text("云端还没有地图").foregroundStyle(AppTheme.textSecondary)
+            } else {
+                List(items, selection: $selectedID) { item in
+                    VStack(alignment: .leading) {
+                        Text(item.name)
+                        Text("上传者：\(item.uploadedBy) · \(ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file))")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.textSecondary)
+                    }
+                    .tag(item.id)
+                }
+            }
+            HStack {
+                Button("刷新") { Task { await reload() } }
+                Spacer()
+                Button("取消") { dismiss() }
+                Button("下载所选地图") {
+                    guard let selectedID else { return }
+                    Task {
+                        isLoading = true
+                        defer { isLoading = false }
+                        do {
+                            onDownload(try await downloadMap(selectedID))
+                            dismiss()
+                        } catch {
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedID == nil || isLoading)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 520, minHeight: 380)
+        .task { await reload() }
+    }
+
+    private func reload() async {
+        isLoading = true
+        errorMessage = ""
+        defer { isLoading = false }
+        do {
+            items = try await listMaps()
+            if !items.contains(where: { $0.id == selectedID }) {
+                selectedID = items.first?.id
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }
 
 extension MapTopology: Identifiable {

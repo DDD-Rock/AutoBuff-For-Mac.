@@ -123,11 +123,18 @@ struct ContentView: View {
                     windowID: window.windowID,
                     maps: viewModel.settings.mapTopologies,
                     jumpKey: viewModel.settings.jumpKey,
-                    allowsInputActions: viewModel.mode != .monitor
+                    allowsInputActions: viewModel.mode != .monitor,
+                    cloudAccess: viewModel.remoteMonitorIsSuperAdmin
                 ) { maps in
                     viewModel.settings.mapTopologies = maps
                     viewModel.saveSettings()
                     viewModel.appendLog("地图库已保存：共 \(maps.count) 张地图")
+                } listCloudMaps: {
+                    try await viewModel.listCloudMaps()
+                } uploadCloudMaps: { maps in
+                    try await viewModel.uploadCloudMaps(maps)
+                } downloadCloudMap: { id in
+                    try await viewModel.downloadCloudMap(id: id)
                 }
             }
         }
