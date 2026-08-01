@@ -90,6 +90,7 @@ enum RemoteMonitorError: LocalizedError {
     case invalidServerURL
     case invalidResponse
     case server(String)
+    case clientUnbound(String)
     case notAuthenticated
 
     var errorDescription: String? {
@@ -97,6 +98,7 @@ enum RemoteMonitorError: LocalizedError {
         case .invalidServerURL: return "监控服务器地址无效"
         case .invalidResponse: return "监控服务器返回了无效数据"
         case .server(let message): return message
+        case .clientUnbound(let message): return message
         case .notAuthenticated: return "请先登录监控账号"
         }
     }
@@ -226,6 +228,7 @@ private struct RemoteServerMessage: Decodable {
     let clientId: String?
     let name: String?
     let action: String?
+    let reason: String?
 }
 
 /// 布尔型监控状态（符文提示、安全区越界）的上报节奏。
@@ -253,7 +256,7 @@ final class RemoteMonitorClient {
     private(set) var clientName: String?
     private(set) var isSuperAdmin = false
     var onIdentity: ((String) -> Void)?
-    var onCommand: ((String) -> Void)?
+    var onCommand: ((String, String?) -> Void)?
     private var baseURL = ""
     private var socket: URLSessionWebSocketTask?
     private var publisherURL: URL?
@@ -597,6 +600,11 @@ final class RemoteMonitorClient {
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
             let apiError = try? JSONDecoder().decode(RemoteAPIError.self, from: data)
+            if httpResponse.statusCode == 403 {
+                throw RemoteMonitorError.clientUnbound(
+                    apiError?.message ?? "当前客户端已解绑，请重新登录"
+                )
+            }
             throw RemoteMonitorError.server(
                 apiError?.message ?? "客户端授权检查失败（\(httpResponse.statusCode)）"
             )
@@ -627,22 +635,35 @@ final class RemoteMonitorClient {
                 try? RemoteMonitorLocalStore.shared.saveClientName(name)
             }
         } else if decoded.type == "command", let action = decoded.action {
-            onCommand?(action)
+            onCommand?(action, decoded.reason)
         }
     }
 
     private func handlePublisherDisconnected(_ task: URLSessionWebSocketTask) {
         guard publisherEnabled, socket === task,
-              let publisherURL, let accessToken else { return }
+              publisherURL != nil, accessToken != nil else { return }
         socket = nil
         resetSendQueue()
+        schedulePublisherReconnect()
+    }
+
+    private func schedulePublisherReconnect() {
+        guard publisherEnabled, let publisherURL, let accessToken else { return }
         reconnectTask?.cancel()
         let delaySeconds = min(15, 1 << min(reconnectAttempt, 4))
         reconnectAttempt += 1
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delaySeconds))
             guard let self, !Task.isCancelled, publisherEnabled else { return }
-            startPublisherSocket(url: publisherURL, accessToken: accessToken)
+            do {
+                try await validateCurrentClient()
+                guard !Task.isCancelled, publisherEnabled else { return }
+                startPublisherSocket(url: publisherURL, accessToken: accessToken)
+            } catch RemoteMonitorError.clientUnbound(let message) {
+                onCommand?("unbind", message)
+            } catch {
+                schedulePublisherReconnect()
+            }
         }
     }
 

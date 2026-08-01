@@ -613,7 +613,7 @@ final class MainViewModel: ObservableObject {
         remoteMonitorClient.onIdentity = { [weak self] name in
             self?.remoteClientName = name
         }
-        remoteMonitorClient.onCommand = { [weak self] action in
+        remoteMonitorClient.onCommand = { [weak self] action, reason in
             guard let self else { return }
             switch action {
             case "start":
@@ -623,12 +623,16 @@ final class MainViewModel: ObservableObject {
                 }
             case "stop":
                 if isRunning {
-                    appendLog("收到网页远程停止指令")
+                    if reason == "monitor_conflict" {
+                        appendLog("同一账号已有另一个客户端在运行监控模式，本机已自动停止")
+                    } else {
+                        appendLog("收到网页远程停止指令")
+                    }
                     stopWorker()
                 }
             case "unbind":
-                appendLog("当前客户端已被管理员解绑，正在退出登录")
-                logoutRemoteMonitor(message: "当前客户端已被管理员解绑，请重新登录")
+                appendLog("当前客户端已解绑，正在停止功能并退出登录")
+                logoutRemoteMonitor(message: reason ?? "当前客户端已解绑，请重新登录")
                 return
             default:
                 break
