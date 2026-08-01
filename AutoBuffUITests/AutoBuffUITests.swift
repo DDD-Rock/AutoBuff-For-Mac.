@@ -39,6 +39,7 @@ final class AutoBuffUITests: XCTestCase {
         XCTAssertTrue(elements["settings.title"].exists)
         XCTAssertTrue(elements["mode.dead"].exists)
         XCTAssertTrue(elements["mode.live"].exists)
+        XCTAssertTrue(elements["mode.temple"].exists)
     }
 
     @MainActor

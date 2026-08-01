@@ -64,12 +64,17 @@ struct SettingsSectionView: View {
 
             Divider().overlay(AppTheme.border)
 
-            if viewModel.mode == .liveFlower {
+            switch viewModel.mode {
+            case .liveFlower:
                 liveOptions
-            } else if viewModel.mode == .deadFlower {
+            case .deadFlower:
                 deadOptions
-            } else {
+            case .temple:
+                templeOptions
+            case .followHeal:
                 followHealOptions
+            case .monitor:
+                EmptyView()
             }
         }
         .appCard()
@@ -226,6 +231,40 @@ struct SettingsSectionView: View {
             }
         }
         .frame(minHeight: 44)
+        .allowsHitTesting(!viewModel.isRunning)
+    }
+
+    private var templeOptions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Label("神殿功能", systemImage: "building.columns")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Picker("", selection: $viewModel.settings.templeFunction) {
+                    ForEach(TempleFunction.allCases, id: \.self) { function in
+                        Text(function.title).tag(function)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("temple.function")
+            }
+
+            Divider().overlay(AppTheme.border)
+
+            switch viewModel.settings.templeFunction {
+            case .freeEntry:
+                deadOptions
+            case .lounge, .ropeParty:
+                Label(
+                    "“\(viewModel.settings.templeFunction.title)”的专属配置将在后续补充",
+                    systemImage: "clock.badge"
+                )
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(AppTheme.textSecondary)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+        }
         .allowsHitTesting(!viewModel.isRunning)
     }
 

@@ -4,6 +4,7 @@ import Foundation
 enum AppMode: String, Codable, CaseIterable {
     case deadFlower = "dead"
     case liveFlower = "live"
+    case temple
     case followHeal = "follow_heal"
     case monitor
 
@@ -11,8 +12,23 @@ enum AppMode: String, Codable, CaseIterable {
         switch self {
         case .deadFlower: return "死花模式"
         case .liveFlower: return "活花模式"
+        case .temple: return "神殿模式"
         case .followHeal: return "跟补模式"
         case .monitor: return "监控模式"
+        }
+    }
+}
+
+enum TempleFunction: String, Codable, CaseIterable {
+    case lounge
+    case ropeParty = "rope_party"
+    case freeEntry = "free_entry"
+
+    var title: String {
+        switch self {
+        case .lounge: return "休息室"
+        case .ropeParty: return "挂绳组队"
+        case .freeEntry: return "进出自由"
         }
     }
 }
@@ -60,11 +76,12 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int = currentSchemaVersion
     var mode: AppMode = .deadFlower
     var returnToMarket: Bool = true
+    var templeFunction: TempleFunction = .freeEntry
     var jumpKey: String = "Alt"
     var healSkillKey: String = ""
     var healAnchorX: Int? = nil
@@ -104,6 +121,7 @@ extension AppSettings {
         case schemaVersion
         case mode
         case returnToMarket
+        case templeFunction
         case jumpKey
         case healSkillKey
         case healAnchorX
@@ -139,6 +157,10 @@ extension AppSettings {
         self.mode = try container.decodeIfPresent(AppMode.self, forKey: .mode)
             ?? (returnToMarket ? .deadFlower : .liveFlower)
         self.returnToMarket = returnToMarket
+        self.templeFunction = try container.decodeIfPresent(
+            TempleFunction.self,
+            forKey: .templeFunction
+        ) ?? .freeEntry
         self.jumpKey = try container.decodeIfPresent(String.self, forKey: .jumpKey) ?? "Alt"
         self.healSkillKey = try container.decodeIfPresent(String.self, forKey: .healSkillKey) ?? ""
         self.healAnchorX = try container.decodeIfPresent(Int.self, forKey: .healAnchorX)
@@ -185,6 +207,7 @@ extension AppSettings {
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(mode, forKey: .mode)
         try container.encode(returnToMarket, forKey: .returnToMarket)
+        try container.encode(templeFunction, forKey: .templeFunction)
         try container.encode(jumpKey, forKey: .jumpKey)
         try container.encode(healSkillKey, forKey: .healSkillKey)
         try container.encodeIfPresent(healAnchorX, forKey: .healAnchorX)

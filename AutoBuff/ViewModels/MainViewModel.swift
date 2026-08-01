@@ -255,6 +255,23 @@ final class MainViewModel: ObservableObject {
         case .deadFlower:
             deadWorker.start(settings: settings, windowID: window.windowID)
             appendLog("死花模式已启动")
+        case .temple:
+            switch settings.templeFunction {
+            case .freeEntry:
+                // “进出自由”与死花的运行流程一致；其余神殿功能在各自配置明确后
+                // 再接入独立 Worker，避免三套行为耦合在 DeadFlowerWorker 中。
+                deadWorker.start(
+                    settings: settings,
+                    windowID: window.windowID,
+                    displayName: "神殿模式 · 进出自由"
+                )
+                appendLog("神殿模式 · 进出自由已启动")
+            case .lounge, .ropeParty:
+                // 正常情况下会被配置校验拦截；这里保留执行层保护，
+                // 防止后续调整校验时误走“进出自由”的逻辑。
+                isRunning = false
+                appendLog("神殿模式的“\(settings.templeFunction.title)”功能配置尚未开放")
+            }
         case .followHeal:
             followHealWorker.start(settings: settings, windowID: window.windowID)
             appendLog("跟补模式已启动")
@@ -938,6 +955,16 @@ enum WorkerConfigurationValidator {
         }
         if mode == .deadFlower && KeyCodeMap.virtualKeyCode(for: settings.jumpKey) == nil {
             errors.append("跳跃键“\(settings.jumpKey)”不受支持")
+        }
+        if mode == .temple {
+            switch settings.templeFunction {
+            case .freeEntry:
+                if KeyCodeMap.virtualKeyCode(for: settings.jumpKey) == nil {
+                    errors.append("跳跃键“\(settings.jumpKey)”不受支持")
+                }
+            case .lounge, .ropeParty:
+                errors.append("神殿模式的“\(settings.templeFunction.title)”功能配置尚未开放")
+            }
         }
         if mode == .followHeal {
             if settings.healSkillKey.isEmpty {

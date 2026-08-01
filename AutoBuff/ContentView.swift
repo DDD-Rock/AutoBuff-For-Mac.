@@ -423,6 +423,11 @@ struct ContentView: View {
                 subtitle: "在当前地图循环释放"
             )
             modeButton(
+                .temple,
+                icon: "building.columns.fill",
+                subtitle: "适配时间神殿地图"
+            )
+            modeButton(
                 .followHeal,
                 icon: "heart.circle.fill",
                 subtitle: "自动补血并回位"
@@ -475,7 +480,8 @@ struct ContentView: View {
             .disabled(viewModel.isRunning)
             .help("地图")
 
-            if viewModel.mode == .deadFlower {
+            if viewModel.mode == .deadFlower
+                || (viewModel.mode == .temple && viewModel.settings.templeFunction == .freeEntry) {
                 Button {
                     Task { await viewModel.requestPortalMarker() }
                 } label: {
@@ -515,6 +521,7 @@ struct ContentView: View {
         switch viewModel.mode {
         case .deadFlower: return "释放 Buff 后自动进入自由市场"
         case .liveFlower: return "在当前地图循环释放 Buff"
+        case .temple: return "为时间神殿地图配置专用 Buff 行为"
         case .followHeal: return "自动补血、位置修正并回到基准点"
         case .monitor: return "只读取游戏画面并显示实时地图"
         }

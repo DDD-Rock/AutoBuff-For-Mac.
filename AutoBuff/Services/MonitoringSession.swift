@@ -63,7 +63,7 @@ enum ModeRequirements {
     }
 
     static func requiresScreenRecording(_ mode: AppMode) -> Bool {
-        mode == .deadFlower || mode == .followHeal || mode == .monitor
+        mode == .deadFlower || mode == .temple || mode == .followHeal || mode == .monitor
     }
 }
 

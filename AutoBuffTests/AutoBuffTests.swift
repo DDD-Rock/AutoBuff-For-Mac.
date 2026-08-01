@@ -76,6 +76,39 @@ struct SettingsManagerTests {
         #expect(errors == ["请至少启用一个 Buff"])
     }
 
+    @Test func templeFreeEntryUsesDeadFlowerRequirements() {
+        var settings = AppSettings.default
+        settings.templeFunction = .freeEntry
+        settings.jumpKey = ""
+
+        let errors = WorkerConfigurationValidator.validationErrors(
+            settings: settings,
+            mode: .temple
+        )
+
+        #expect(errors == ["跳跃键“”不受支持"])
+        #expect(ModeRequirements.requiresAccessibility(.temple))
+        #expect(ModeRequirements.requiresScreenRecording(.temple))
+    }
+
+    @Test func unfinishedTempleFunctionsCannotStart() {
+        var settings = AppSettings.default
+        settings.templeFunction = .lounge
+
+        let loungeErrors = WorkerConfigurationValidator.validationErrors(
+            settings: settings,
+            mode: .temple
+        )
+        settings.templeFunction = .ropeParty
+        let ropePartyErrors = WorkerConfigurationValidator.validationErrors(
+            settings: settings,
+            mode: .temple
+        )
+
+        #expect(loungeErrors == ["神殿模式的“休息室”功能配置尚未开放"])
+        #expect(ropePartyErrors == ["神殿模式的“挂绳组队”功能配置尚未开放"])
+    }
+
     @Test func monitorModeDoesNotRequireBuffsOrInputKeys() {
         var settings = AppSettings.default
         settings.buffs = settings.buffs.map {
@@ -105,6 +138,7 @@ struct SettingsManagerTests {
         #expect(settings.buffs[0].enabled == true)
         #expect(settings.buffs[0].key == "1")
         #expect(settings.preSkillMoveMode == .rightOnly)
+        #expect(settings.templeFunction == .freeEntry)
     }
 
     @Test func saveAndLoadRoundTrip() throws {
@@ -177,6 +211,25 @@ struct SettingsManagerTests {
         #expect(loaded.followHealAdjustMaxMS == 330)
     }
 
+    @Test func templeModeAndFunctionPersist() throws {
+        for function in TempleFunction.allCases {
+            let tempDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            var settings = AppSettings.default
+            settings.mode = .temple
+            settings.templeFunction = function
+
+            let manager = SettingsManager(settingsDirectory: tempDir)
+            manager.save(settings)
+            let loaded = manager.load()
+
+            #expect(loaded.mode == .temple)
+            #expect(loaded.templeFunction == function)
+            #expect(loaded.returnToMarket == false)
+        }
+    }
+
     @Test func monitorModeAndAllDisplayModesPersist() throws {
         for displayMode in MonitorDisplayMode.allCases {
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -214,6 +267,7 @@ struct SettingsManagerTests {
         let loaded = SettingsManager(settingsDirectory: tempDir).load()
 
         #expect(loaded.monitorDisplayMode == .minimapWithAnnotations)
+        #expect(loaded.templeFunction == .freeEntry)
     }
 
     @Test func mapLibraryIsStoredSeparatelyFromSettings() throws {

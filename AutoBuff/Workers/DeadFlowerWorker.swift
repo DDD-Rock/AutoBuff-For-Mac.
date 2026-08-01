@@ -35,7 +35,11 @@ final class DeadFlowerWorker: ObservableObject {
     private let blackScreenWait = 2.5
     private let sceneCheckInterval = 2.0
     
-    func start(settings: AppSettings, windowID: CGWindowID) {
+    func start(
+        settings: AppSettings,
+        windowID: CGWindowID,
+        displayName: String = "死花模式"
+    ) {
         stop()
         let currentRunID = UUID()
         runID = currentRunID
@@ -47,7 +51,12 @@ final class DeadFlowerWorker: ObservableObject {
         marketDetector.setWindow(windowID)
         dialogDetector.setWindow(windowID)
         task = Task {
-            await run(settings: settings, windowID: windowID, runID: currentRunID)
+            await run(
+                settings: settings,
+                windowID: windowID,
+                runID: currentRunID,
+                displayName: displayName
+            )
         }
     }
     
@@ -60,7 +69,12 @@ final class DeadFlowerWorker: ObservableObject {
         Task { await human.releaseAll() }
     }
     
-    private func run(settings: AppSettings, windowID: CGWindowID, runID currentRunID: UUID) async {
+    private func run(
+        settings: AppSettings,
+        windowID: CGWindowID,
+        runID currentRunID: UUID,
+        displayName: String
+    ) async {
         let buffs = settings.buffs.filter {
             $0.enabled && !$0.key.isEmpty && $0.duration > 0
         }
@@ -71,7 +85,7 @@ final class DeadFlowerWorker: ObservableObject {
             return
         }
         
-        log("死花模式启动...")
+        log("\(displayName)启动...")
         if !windowSelector.bringWindowToFront(windowID: windowID) {
             log("⚠️ 无法将游戏窗口置于前台")
         }
@@ -208,7 +222,7 @@ final class DeadFlowerWorker: ObservableObject {
         
         await human.releaseAll()
         countdownPublisher.stop()
-        log("死花模式已停止")
+        log("\(displayName)已停止")
         if runID == currentRunID {
             isRunning = false
             task = nil
