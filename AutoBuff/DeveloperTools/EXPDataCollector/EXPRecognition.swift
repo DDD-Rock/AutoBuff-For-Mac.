@@ -13,14 +13,22 @@ struct EXPParsedText: Equatable {
 }
 
 enum EXPTextParser {
-    private static let expression = try! NSRegularExpression(
-        pattern: #"(?:E|D|Đ|F)XP[\s\.:_-]*([0-9]+)\s*[\(\[\{]\s*([0-9]+(?:[\.,，][0-9]+)?)\s*%\s*[\)\]\}]?"#,
-        options: [.caseInsensitive]
-    )
+    private static let expressions = [
+        try! NSRegularExpression(
+            pattern: #"(?:[EDFĐ]?XP|P)[\s\.:_-]*([0-9]{4,})\s*[\(\[\{]\s*([0-9]+(?:[\.,，][0-9]+)?)\s*%\s*[\)\]\}]?"#,
+            options: [.caseInsensitive]
+        ),
+        try! NSRegularExpression(
+            pattern: #"(?:[EDFĐ]?XP|P)[\s\.:_-]*([0-9]{4,}?)\s*[\(\[\{]?\s*((?:100[\.,，]0{1,4}|[0-9]{1,2}[\.,，][0-9]{1,4}))\s*%"#,
+            options: [.caseInsensitive]
+        ),
+    ]
 
     static func parse(_ text: String) -> EXPParsedText? {
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let match = expression.firstMatch(in: text, range: fullRange),
+        guard let match = expressions.compactMap({
+            $0.firstMatch(in: text, range: fullRange)
+        }).first,
               let expRange = Range(match.range(at: 1), in: text),
               let percentRange = Range(match.range(at: 2), in: text),
               let matchRange = Range(match.range(at: 0), in: text),
@@ -322,6 +330,36 @@ enum EXPVisionRecognizer {
                 )
                 if attempt.reading == nil
                     || candidate.confidence > attempt.reading!.confidence {
+                    attempt.reading = reading
+                }
+            }
+        }
+
+        let joinedCandidates = (request.results ?? [])
+            .compactMap { observation -> (VNRecognizedTextObservation, VNRecognizedText)? in
+                guard let candidate = observation.topCandidates(1).first else {
+                    return nil
+                }
+                return (observation, candidate)
+            }
+            .sorted { $0.0.boundingBox.minX < $1.0.boundingBox.minX }
+        if joinedCandidates.count >= 2 {
+            let rawText = joinedCandidates.map { $0.1.string }.joined()
+            let confidence = joinedCandidates.map { $0.1.confidence }.min() ?? 0
+            if let parsed = EXPTextParser.parse(rawText) {
+                let lineBox = joinedCandidates
+                    .map { $0.0.boundingBox }
+                    .reduce(CGRect.null) { $0.union($1) }
+                let reading = EXPTextReading(
+                    currentEXP: parsed.currentEXP,
+                    percent: parsed.percent,
+                    rawText: rawText,
+                    confidence: confidence,
+                    normalizedLineBox: lineBox,
+                    glyphBoxes: []
+                )
+                if attempt.reading == nil
+                    || confidence > attempt.reading!.confidence {
                     attempt.reading = reading
                 }
             }

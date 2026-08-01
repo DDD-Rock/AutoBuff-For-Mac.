@@ -100,6 +100,34 @@ struct EXPFixedFontRecognizerTests {
         #expect(stabilizer.update(nil) == nil)
     }
 
+    @Test func productionStabilizerRequiresThreeMatchingOCRFrames() {
+        let reading = EXPRecognitionResult(
+            currentEXP: 6_528,
+            percent: 0.01,
+            confidence: 0.98
+        )
+        var stabilizer = EXPRecognitionStabilizer()
+
+        #expect(stabilizer.update(reading) == nil)
+        #expect(stabilizer.update(reading) == nil)
+        #expect(stabilizer.update(reading) == reading)
+    }
+
+    @Test func exposesTemplateLocatedPanelForOCR() throws {
+        let panel = try makePanel(currentEXP: "6528", percentage: "0.01")
+        var frame = ImageBuffer(
+            width: 900,
+            height: 500,
+            bgr: [UInt8](repeating: 18, count: 900 * 500 * 3)
+        )
+        paste(panel, into: &frame, x: 358, y: 440)
+
+        let located = try #require(EXPFixedFontRecognizer.locatePanel(in: frame))
+
+        #expect(abs(located.width - panel.width) <= 2)
+        #expect(abs(located.height - panel.height) <= 2)
+    }
+
     @Test func replaysLocalCollectedSamplesWhenAvailable() throws {
         let root = EXPDatasetStore.defaultDirectoryURL
         let manifest = root.appendingPathComponent("manifest.jsonl")

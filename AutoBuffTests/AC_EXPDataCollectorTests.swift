@@ -15,6 +15,18 @@ struct EXPDataCollectorTests {
         #expect(compact.percent == 12.5)
         #expect(compact.displayText == "72384 (12.5%)")
 
+        let tolerant = try #require(
+            EXPTextParser.parse("EXP35801709160.72%1")
+        )
+        #expect(tolerant.currentEXP == 358_017_091)
+        #expect(tolerant.percent == 60.72)
+
+        let splitOCR = try #require(
+            EXPTextParser.parse("P223944737[37.98%")
+        )
+        #expect(splitOCR.currentEXP == 223_944_737)
+        #expect(splitOCR.percent == 37.98)
+
         let pixelFontOCR = try #require(
             EXPTextParser.parse("ĐXP72384[0.12% ]")
         )

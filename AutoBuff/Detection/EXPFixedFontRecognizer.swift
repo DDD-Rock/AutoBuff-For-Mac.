@@ -62,7 +62,7 @@ struct EXPRecognitionStabilizer {
     private(set) var misses = 0
     private(set) var stableReading: EXPRecognitionResult?
 
-    init(requiredMatches: Int = 2, toleratedMisses: Int = 3) {
+    init(requiredMatches: Int = 3, toleratedMisses: Int = 3) {
         self.requiredMatches = max(1, requiredMatches)
         self.toleratedMisses = max(0, toleratedMisses)
     }
@@ -131,6 +131,40 @@ enum EXPFixedFontRecognizer {
             anchor: fallbackAnchor,
             pixels: pixels,
             templates: templates
+        )
+    }
+
+    /// Uses the stable EXP anchor only to crop the complete panel for OCR.
+    static func locatePanel(in frame: ImageBuffer) -> ImageBuffer? {
+        guard let templates = EXPFixedFontTemplateLibrary.shared else {
+            return nil
+        }
+        let anchor = EXPPanelLocator.locateNearbyAnchor(
+            in: frame,
+            template: templates.anchorImage
+        ) ?? EXPPanelLocator.locateFallbackAnchor(
+            in: frame,
+            template: templates.anchorImage
+        )
+        guard let anchor else { return nil }
+
+        let left = Int(
+            (Double(anchor.x) - 8 * anchor.scale).rounded()
+        )
+        let top = Int(
+            (Double(anchor.y) - 3 * anchor.scale).rounded()
+        )
+        let width = max(1, Int((185 * anchor.scale).rounded()))
+        let height = max(1, Int((44 * anchor.scale).rounded()))
+        let safeLeft = max(0, left)
+        let safeTop = max(0, top)
+        let safeWidth = min(width - (safeLeft - left), frame.width - safeLeft)
+        let safeHeight = min(height - (safeTop - top), frame.height - safeTop)
+        return frame.cropped(
+            x: safeLeft,
+            y: safeTop,
+            width: safeWidth,
+            height: safeHeight
         )
     }
 
@@ -501,6 +535,28 @@ enum EXPFixedFontRecognizer {
             }
         }
         return result
+    }
+}
+
+/// Production EXP pipeline: template localization followed by whole-row OCR.
+enum EXPHybridRecognizer {
+    static func recognize(in frame: ImageBuffer) -> EXPRecognitionResult? {
+        guard let panel = EXPFixedFontRecognizer.locatePanel(in: frame) else {
+            return nil
+        }
+        let attempt = EXPVisionRecognizer.recognize(in: panel)
+        guard let reading = attempt.reading else { return nil }
+        let isTrusted = reading.confidence >= 0.48
+            || (
+                reading.preprocessingAgreement
+                    && reading.confidence >= 0.25
+            )
+        guard isTrusted else { return nil }
+        return EXPRecognitionResult(
+            currentEXP: reading.currentEXP,
+            percent: reading.percent,
+            confidence: Double(reading.confidence)
+        )
     }
 }
 

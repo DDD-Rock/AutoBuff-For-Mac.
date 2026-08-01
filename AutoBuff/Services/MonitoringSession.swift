@@ -174,7 +174,7 @@ final class MonitoringSession {
                 )
                 let analysis = await Task.detached(priority: .utility) {
                     (
-                        EXPFixedFontRecognizer.recognize(in: captured.buffer),
+                        EXPHybridRecognizer.recognize(in: captured.buffer),
                         shouldDetectRune
                             ? RuneAlertDetector.detect(in: captured.buffer)
                             : nil
