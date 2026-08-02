@@ -7,6 +7,7 @@ final class PartyInviteWorker: ObservableObject {
     var onLog: ((String) -> Void)?
     var onError: ((String) -> Void)?
     var onStateChanged: ((Bool) -> Void)?
+    var onInviteAccepted: (() -> Void)?
 
     private let detector = PartyInviteDetector()
     private let human = HumanInput()
@@ -87,6 +88,7 @@ final class PartyInviteWorker: ObservableObject {
             await sleep(0.3)
             if (try? await detector.findAcceptButtonScreenPoint()) == nil {
                 onLog?("已同意队伍邀请")
+                onInviteAccepted?()
                 return
             }
         }

@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 enum MainWindowLayout {
-    static let sidebarWidth: CGFloat = 56
-    static let minimumContentWidth: CGFloat = 540
-    static let preferredContentWidth: CGFloat = 600
+    static let sidebarWidth: CGFloat = 132
+    static let minimumContentWidth: CGFloat = 616
+    static let preferredContentWidth: CGFloat = 680
 
     static func preferredContentHeight(
         visibleScreenHeight: CGFloat,

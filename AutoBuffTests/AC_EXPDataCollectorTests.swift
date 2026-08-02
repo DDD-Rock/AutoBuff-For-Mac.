@@ -32,10 +32,24 @@ struct EXPDataCollectorTests {
         )
         #expect(pixelFontOCR.currentEXP == 72_384)
         #expect(pixelFontOCR.percent == 0.12)
+
+        let anchorMissed = try #require(
+            EXPTextParser.parse("223,944,737[37.98%")
+        )
+        #expect(anchorMissed.currentEXP == 223_944_737)
+        #expect(anchorMissed.percent == 37.98)
+
+        let zeroEXP = try #require(EXPTextParser.parse("EXP 0 (0.0%)"))
+        #expect(zeroEXP.currentEXP == 0)
+        #expect(zeroEXP.percent == 0)
+
+        let shortEXP = try #require(EXPTextParser.parse("EXP 123 (12.09%)"))
+        #expect(shortEXP.currentEXP == 123)
+        #expect(shortEXP.percent == 12.09)
     }
 
-    @Test func rejectsMissingAnchorAndOutOfRangePercentage() {
-        #expect(EXPTextParser.parse("72384 (0.12%)") == nil)
+    @Test func rejectsIncompleteAndOutOfRangePercentage() {
+        #expect(EXPTextParser.parse("72384") == nil)
         #expect(EXPTextParser.parse("EXP 72384 (101%)") == nil)
         #expect(EXPTextParser.parse("EXP ABC (0.12%)") == nil)
     }

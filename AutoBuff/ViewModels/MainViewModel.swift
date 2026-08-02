@@ -3,6 +3,26 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
+private struct MonitorFramePresentation {
+    var image: NSImage?
+    var contentSize: CGSize
+    var playerPoint: CGPoint?
+    var teammatePoints: [CGPoint]
+    var otherPlayerPoints: [CGPoint]
+    var matchedTopology: MapTopology?
+    var framesPerSecond: Double
+
+    static let empty = MonitorFramePresentation(
+        image: nil,
+        contentSize: .zero,
+        playerPoint: nil,
+        teammatePoints: [],
+        otherPlayerPoints: [],
+        matchedTopology: nil,
+        framesPerSecond: 0
+    )
+}
+
 @available(macOS 14.0, *)
 @MainActor
 final class MainViewModel: ObservableObject {
@@ -30,18 +50,14 @@ final class MainViewModel: ObservableObject {
     @Published var previewInfo = ""
     @Published var expDataCollection = EXPDataCollectionSnapshot()
     @Published var isPartyInviteWorkerActive = false
-    @Published var monitorImage: NSImage?
-    @Published var monitorContentSize: CGSize = .zero
-    @Published var monitorPlayerPoint: CGPoint?
-    @Published var monitorTeammatePoints: [CGPoint] = []
-    @Published var monitorOtherPlayerPoints: [CGPoint] = []
-    @Published var monitorMatchedTopology: MapTopology?
+    @Published private var monitorFramePresentation = MonitorFramePresentation.empty
     @Published var monitorStatusText = "尚未开始监控"
-    @Published var monitorFPS = 0.0
     @Published var monitorEXPReading: EXPRecognitionResult?
     @Published var monitorEXPStatus = "尚未开始识别 EXP"
     @Published var monitorRuneAlertPresent = false
     @Published var monitorRuneAlertDetection: RuneAlertDetection?
+    @Published var monitorMouseFollowVerificationPresent = false
+    @Published var monitorMouseFollowVerificationDetection: MouseFollowVerificationDetection?
     @Published var monitorRuneTestBusy = false
     @Published var monitorRuneTestSummary = ""
     @Published var monitorZoneOutside = false
@@ -49,11 +65,22 @@ final class MainViewModel: ObservableObject {
     @Published var remoteMonitorIsSuperAdmin = false
     @Published var remoteMonitorAuthStatus = "未登录远程监控账号"
     @Published var remoteClientName = "正在分配客户端名称"
+    @Published var remoteMonitorLinkCopied = false
+
+    var monitorImage: NSImage? { monitorFramePresentation.image }
+    var monitorContentSize: CGSize { monitorFramePresentation.contentSize }
+    var monitorPlayerPoint: CGPoint? { monitorFramePresentation.playerPoint }
+    var monitorTeammatePoints: [CGPoint] { monitorFramePresentation.teammatePoints }
+    var monitorOtherPlayerPoints: [CGPoint] { monitorFramePresentation.otherPlayerPoints }
+    var monitorMatchedTopology: MapTopology? { monitorFramePresentation.matchedTopology }
+    var monitorFPS: Double { monitorFramePresentation.framesPerSecond }
 
     private let settingsManager = SettingsManager()
     private let windowSelector = WindowSelector()
     private let liveWorker = LiveFlowerWorker()
     private let deadWorker = DeadFlowerWorker()
+    private let loungeWorker = LoungeWorker()
+    private let ropePartyWorker = RopePartyWorker()
     private let followHealWorker = FollowHealWorker()
     private let partyInviteWorker = PartyInviteWorker()
     private let monitoringSession = MonitoringSession()
@@ -64,6 +91,8 @@ final class MainViewModel: ObservableObject {
     /// 图片回放测试期间为 true，此时忽略实时识别结果，避免注入的状态被覆盖。
     private var isRuneTestHolding = false
     private var runeTestHoldTask: Task<Void, Never>?
+    private var isMouseFollowVerificationTestHolding = false
+    private var mouseFollowVerificationTestHoldTask: Task<Void, Never>?
     private var safeZoneStabilizer = SafeZoneStabilizer()
 
     enum KeyboardTarget: Equatable {
@@ -266,11 +295,17 @@ final class MainViewModel: ObservableObject {
                     displayName: "神殿模式 · 进出自由"
                 )
                 appendLog("神殿模式 · 进出自由已启动")
-            case .lounge, .ropeParty:
-                // 正常情况下会被配置校验拦截；这里保留执行层保护，
-                // 防止后续调整校验时误走“进出自由”的逻辑。
-                isRunning = false
-                appendLog("神殿模式的“\(settings.templeFunction.title)”功能配置尚未开放")
+            case .lounge:
+                loungeWorker.start(settings: settings, windowID: window.windowID)
+                appendLog("神殿模式 · 休息室已启动")
+            case .ropeParty:
+                let launchSettings = settings
+                ropePartyWorker.start(settings: launchSettings, windowID: window.windowID)
+                if !settings.ropePartyInviteRoleNames.isEmpty {
+                    settings.ropePartyInviteRoleNames = []
+                    saveSettings()
+                }
+                appendLog("神殿模式 · 挂绳组队已启动")
             }
         case .followHeal:
             followHealWorker.start(settings: settings, windowID: window.windowID)
@@ -292,6 +327,8 @@ final class MainViewModel: ObservableObject {
     func stopWorker(resumePartyInvite: Bool = true) {
         liveWorker.stop()
         deadWorker.stop()
+        loungeWorker.stop()
+        ropePartyWorker.stop()
         followHealWorker.stop()
         monitoringSession.stop()
         isRunning = false
@@ -580,14 +617,90 @@ final class MainViewModel: ObservableObject {
     }
 
     func openRemoteMonitorPage() {
-        let baseURL = settings.monitorServerBaseURL
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(baseURL)/clients") else {
+        guard let url = remoteMonitorPageURL() else {
             remoteMonitorAuthStatus = "监控网页地址无效"
             return
         }
         NSWorkspace.shared.open(url)
         remoteMonitorAuthStatus = "已打开监控网页，请登录同一账号"
+    }
+
+    func copyRemoteMonitorPageLink() {
+        guard let url = remoteMonitorPageURL() else {
+            remoteMonitorAuthStatus = "监控网页地址无效"
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(url.absoluteString, forType: .string) else {
+            remoteMonitorAuthStatus = "复制监控网页链接失败"
+            return
+        }
+        remoteMonitorLinkCopied = true
+        remoteMonitorAuthStatus = "监控网页链接已复制"
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            remoteMonitorLinkCopied = false
+        }
+    }
+
+    func openClientManagementPage() {
+        guard let url = clientManagementPageURL() else {
+            remoteMonitorAuthStatus = "客户端管理网页地址无效"
+            return
+        }
+        NSWorkspace.shared.open(url)
+        remoteMonitorAuthStatus = "已打开客户端管理网页"
+    }
+
+    func copyClientManagementPageLink() {
+        guard let url = clientManagementPageURL() else {
+            remoteMonitorAuthStatus = "客户端管理网页地址无效"
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(url.absoluteString, forType: .string) else {
+            remoteMonitorAuthStatus = "复制客户端管理链接失败"
+            return
+        }
+        remoteMonitorLinkCopied = true
+        remoteMonitorAuthStatus = "客户端管理链接已复制"
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            remoteMonitorLinkCopied = false
+        }
+    }
+
+    func saveCharacterName() async {
+        let roleName = settings.characterName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !roleName.isEmpty, roleName.count <= 24 else {
+            appendLog("角色名称须为 1～24 个字符")
+            return
+        }
+        guard remoteMonitorAuthenticated else {
+            appendLog("请先登录远程账号再保存角色名称")
+            return
+        }
+        do {
+            settings.characterName = try await remoteMonitorClient.saveRoleName(roleName)
+            saveSettings()
+            appendLog("角色名称已保存：\(settings.characterName)")
+        } catch {
+            appendLog("角色名称保存失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func remoteMonitorPageURL() -> URL? {
+        let baseURL = settings.monitorServerBaseURL
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return URL(string: "\(baseURL)/dashboard")
+    }
+
+    private func clientManagementPageURL() -> URL? {
+        let baseURL = settings.monitorServerBaseURL
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return URL(string: "\(baseURL)/clients")
     }
 
     private func restoreRemoteMonitorAccount() async {
@@ -601,6 +714,7 @@ final class MainViewModel: ObservableObject {
                 storedToken: storedToken
             )
             settings.monitorAccountUsername = account
+            settings.monitorAccountNickname = remoteMonitorClient.nickname ?? "未设置昵称"
             remoteMonitorAuthenticated = true
             remoteMonitorIsSuperAdmin = remoteMonitorClient.isSuperAdmin
             try remoteMonitorClient.connectPublisher()
@@ -630,9 +744,14 @@ final class MainViewModel: ObservableObject {
         remoteMonitorClient.onIdentity = { [weak self] name in
             self?.remoteClientName = name
         }
-        remoteMonitorClient.onCommand = { [weak self] action, reason in
+        remoteMonitorClient.onRoleName = { [weak self] roleName in
             guard let self else { return }
-            switch action {
+            settings.characterName = roleName
+            saveSettings()
+        }
+        remoteMonitorClient.onCommand = { [weak self] command in
+            guard let self else { return }
+            switch command.action {
             case "start":
                 if !isRunning {
                     appendLog("收到网页远程开始指令")
@@ -640,7 +759,7 @@ final class MainViewModel: ObservableObject {
                 }
             case "stop":
                 if isRunning {
-                    if reason == "monitor_conflict" {
+                    if command.reason == "monitor_conflict" {
                         appendLog("同一账号已有另一个客户端在运行监控模式，本机已自动停止")
                     } else {
                         appendLog("收到网页远程停止指令")
@@ -649,8 +768,46 @@ final class MainViewModel: ObservableObject {
                 }
             case "unbind":
                 appendLog("当前客户端已解绑，正在停止功能并退出登录")
-                logoutRemoteMonitor(message: reason ?? "当前客户端已解绑，请重新登录")
+                logoutRemoteMonitor(message: command.reason ?? "当前客户端已解绑，请重新登录")
                 return
+            case "configure_rope_party":
+                guard let teamID = command.teamId else {
+                    appendLog("收到的挂绳组队配置缺少队伍编号")
+                    return
+                }
+                appendLog("收到网页挂绳组队配置，正在停止当前模式")
+                if isRunning { stopWorker() }
+                mode = .temple
+                settings.mode = .temple
+                settings.returnToMarket = false
+                settings.templeFunction = .ropeParty
+                settings.autoAcceptPartyInviteEnabled = true
+                if let roleName = command.roleName, !roleName.isEmpty {
+                    settings.characterName = roleName
+                }
+                settings.ropePartyTeamID = teamID
+                settings.ropePartyIsLeader = command.isLeader
+                settings.ropePartyInviteRoleNames = command.firstCreation
+                    ? command.inviteRoleNames
+                    : []
+                saveSettings()
+                syncPartyInviteWorker(logMissingRequirements: true)
+                appendLog("已切换为神殿模式 · 挂绳组队，并开启自动同意组队")
+                startWorker()
+            case "disband_rope_party":
+                appendLog("收到网页解散队伍指令，正在停止当前模式")
+                stopWorker(resumePartyInvite: false)
+                settings.autoAcceptPartyInviteEnabled = false
+                settings.ropePartyTeamID = nil
+                settings.ropePartyIsLeader = false
+                settings.ropePartyInviteRoleNames = []
+                saveSettings()
+                guard let window = selectedWindow,
+                      windowSelector.isWindowValid(windowID: window.windowID) else {
+                    appendLog("游戏窗口未识别，无法发送 /退出隊伍")
+                    return
+                }
+                ropePartyWorker.disbandParty(windowID: window.windowID)
             default:
                 break
             }
@@ -682,6 +839,21 @@ final class MainViewModel: ObservableObject {
             self?.publishRemoteClientState()
         }
 
+        loungeWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
+        loungeWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
+        loungeWorker.onStopped = { [weak self] in
+            self?.isRunning = false
+            self?.countdowns = [:]
+            self?.publishRemoteClientState()
+        }
+
+        ropePartyWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
+        ropePartyWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
+        ropePartyWorker.onStopped = { [weak self] in
+            self?.isRunning = false
+            self?.publishRemoteClientState()
+        }
+
         followHealWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         followHealWorker.onCountdown = { [weak self] info in self?.countdowns = info }
         followHealWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
@@ -696,16 +868,33 @@ final class MainViewModel: ObservableObject {
         partyInviteWorker.onStateChanged = { [weak self] active in
             self?.isPartyInviteWorkerActive = active
         }
+        partyInviteWorker.onInviteAccepted = { [weak self] in
+            guard let self else { return }
+            loungeWorker.partyInviteAccepted()
+            if isRunning,
+               mode == .temple,
+               settings.templeFunction == .ropeParty,
+               let teamID = settings.ropePartyTeamID,
+               !settings.characterName.isEmpty {
+                remoteMonitorClient.publishTeamJoined(
+                    teamID: teamID,
+                    roleName: settings.characterName
+                )
+                appendLog("已向服务器上报入队成功")
+            }
+        }
 
         monitoringSession.onFrame = { [weak self] frame in
             guard let self else { return }
-            monitorImage = frame.buffer.mapEditorImage()
-            monitorContentSize = CGSize(width: frame.buffer.width, height: frame.buffer.height)
-            monitorPlayerPoint = frame.playerPoint
-            monitorTeammatePoints = frame.teammatePoints
-            monitorOtherPlayerPoints = frame.otherPlayerPoints
-            monitorMatchedTopology = frame.matchedTopology
-            monitorFPS = frame.framesPerSecond
+            monitorFramePresentation = MonitorFramePresentation(
+                image: frame.buffer.mapEditorImage(),
+                contentSize: CGSize(width: frame.buffer.width, height: frame.buffer.height),
+                playerPoint: frame.playerPoint,
+                teammatePoints: frame.teammatePoints,
+                otherPlayerPoints: frame.otherPlayerPoints,
+                matchedTopology: frame.matchedTopology,
+                framesPerSecond: frame.framesPerSecond
+            )
             remoteMonitorClient.publish(frame: frame)
             evaluateSafeZone(
                 playerPoint: frame.playerPoint,
@@ -713,14 +902,18 @@ final class MainViewModel: ObservableObject {
             )
         }
         monitoringSession.onStatus = { [weak self] status in
-            self?.monitorStatusText = status
+            guard let self, monitorStatusText != status else { return }
+            monitorStatusText = status
         }
         monitoringSession.onEXPReading = { [weak self] reading in
-            self?.monitorEXPReading = reading
+            guard let self, monitorEXPReading != reading else { return }
+            monitorEXPReading = reading
         }
         monitoringSession.onEXPStatus = { [weak self] status in
             guard let self else { return }
-            monitorEXPStatus = status
+            if monitorEXPStatus != status {
+                monitorEXPStatus = status
+            }
             remoteMonitorClient.publishEXP(
                 reading: monitorEXPReading,
                 status: status
@@ -735,6 +928,23 @@ final class MainViewModel: ObservableObject {
             monitorRuneAlertPresent = isPresent
             monitorRuneAlertDetection = detection
             remoteMonitorClient.publishRuneAlert(isPresent: isPresent, detection: detection)
+        }
+        monitoringSession.onMouseFollowVerification = { [weak self] isPresent, detection in
+            guard let self else { return }
+            guard !isMouseFollowVerificationTestHolding else { return }
+            if isPresent != monitorMouseFollowVerificationPresent {
+                appendLog(
+                    isPresent
+                        ? "🚨 检测到鼠标跟随验证，请立即人工处理"
+                        : "鼠标跟随验证弹窗已消失"
+                )
+            }
+            monitorMouseFollowVerificationPresent = isPresent
+            monitorMouseFollowVerificationDetection = detection
+            remoteMonitorClient.publishMouseFollowVerification(
+                isPresent: isPresent,
+                detection: detection
+            )
         }
         monitoringSession.onStopped = { [weak self] reason in
             guard let self else { return }
@@ -838,10 +1048,10 @@ final class MainViewModel: ObservableObject {
         remoteMonitorClient.publishZone(isOutside: safeZoneStabilizer.isOutside, zone: zone)
     }
 
-    /// 用本地图片回放整条符文链路：识别 → 面板提示 → 上报 → 服务端推送。
+    /// 用本地图片回放所选告警链路：识别 → 面板提示 → 上报 → 服务端推送。
     ///
     /// 只在监控运行中可用，避免把离线图片结果混入正常状态。
-    func runRuneAlertImageTest(urls: [URL]) {
+    func runMonitorImageTest(kind: MonitorImageTestKind, urls: [URL]) {
         guard !monitorRuneTestBusy else { return }
         guard !urls.isEmpty else {
             monitorRuneTestSummary = "没有选择图片"
@@ -855,14 +1065,22 @@ final class MainViewModel: ObservableObject {
         monitorRuneTestBusy = true
         monitorRuneTestSummary = "正在识别 \(urls.count) 张图片..."
         Task { [weak self] in
-            let report = await Task.detached(priority: .userInitiated) {
-                RuneAlertImageTestRunner.run(urls: urls)
-            }.value
-            self?.applyRuneAlertImageTestReport(report)
+            switch kind {
+            case .rune:
+                let report = await Task.detached(priority: .userInitiated) {
+                    RuneAlertImageTestRunner.run(urls: urls)
+                }.value
+                self?.applyRuneAlertImageTestReport(report)
+            case .mouseFollowVerification:
+                let report = await Task.detached(priority: .userInitiated) {
+                    MouseFollowVerificationImageTestRunner.run(urls: urls)
+                }.value
+                self?.applyMouseFollowVerificationImageTestReport(report)
+            }
         }
     }
 
-    func reportRuneAlertImageTestFailure(_ error: Error) {
+    func reportMonitorImageTestFailure(_ error: Error) {
         monitorRuneTestSummary = "选择图片失败：\(error.localizedDescription)"
         appendLog(monitorRuneTestSummary)
     }
@@ -877,6 +1095,20 @@ final class MainViewModel: ObservableObject {
             return
         }
         holdRuneAlertForTest(detection: detection, fileName: strongest.fileName)
+    }
+
+    private func applyMouseFollowVerificationImageTestReport(
+        _ report: MouseFollowVerificationImageTestReport
+    ) {
+        monitorRuneTestBusy = false
+        monitorRuneTestSummary = report.summary
+        appendLog("测谎图片测试：\(report.summary)")
+
+        guard let strongest = report.strongest, let detection = strongest.detection else {
+            appendLog("没有识别到测谎弹窗，未触发上报和推送")
+            return
+        }
+        holdMouseFollowVerificationForTest(detection: detection, fileName: strongest.fileName)
     }
 
     /// 注入「有符文」状态并保持一段时间，让服务端那一轮扫描能看到它。
@@ -909,20 +1141,49 @@ final class MainViewModel: ObservableObject {
         appendLog("符文测试状态已恢复，实时识别继续接管")
     }
 
+    private func holdMouseFollowVerificationForTest(
+        detection: MouseFollowVerificationDetection,
+        fileName: String
+    ) {
+        mouseFollowVerificationTestHoldTask?.cancel()
+        isMouseFollowVerificationTestHolding = true
+        monitorMouseFollowVerificationPresent = true
+        monitorMouseFollowVerificationDetection = detection
+        remoteMonitorClient.publishMouseFollowVerification(isPresent: true, detection: detection)
+
+        let seconds = RuneAlertImageTestPolicy.stateHoldDuration.components.seconds
+        appendLog("已按 \(fileName) 上报测谎状态，保持 \(seconds) 秒等待推送")
+
+        mouseFollowVerificationTestHoldTask = Task { [weak self] in
+            try? await Task.sleep(for: RuneAlertImageTestPolicy.stateHoldDuration)
+            guard !Task.isCancelled else { return }
+            self?.releaseMouseFollowVerificationTestHold(restoreState: true)
+        }
+    }
+
+    private func releaseMouseFollowVerificationTestHold(restoreState: Bool) {
+        mouseFollowVerificationTestHoldTask?.cancel()
+        mouseFollowVerificationTestHoldTask = nil
+        guard isMouseFollowVerificationTestHolding else { return }
+        isMouseFollowVerificationTestHolding = false
+        guard restoreState else { return }
+        monitorMouseFollowVerificationPresent = false
+        monitorMouseFollowVerificationDetection = nil
+        remoteMonitorClient.publishMouseFollowVerification(isPresent: false, detection: nil)
+        appendLog("测谎测试状态已恢复，实时识别继续接管")
+    }
+
     private func clearMonitorState(status: String) {
         // 监控停止时发布通道已经断开，再上报「无符文」没有意义，只复位本地状态。
         releaseRuneAlertTestHold(restoreState: false)
-        monitorImage = nil
-        monitorContentSize = .zero
-        monitorPlayerPoint = nil
-        monitorTeammatePoints = []
-        monitorOtherPlayerPoints = []
-        monitorMatchedTopology = nil
-        monitorFPS = 0
+        releaseMouseFollowVerificationTestHold(restoreState: false)
+        monitorFramePresentation = .empty
         monitorEXPReading = nil
         monitorEXPStatus = "尚未开始识别 EXP"
         monitorRuneAlertPresent = false
         monitorRuneAlertDetection = nil
+        monitorMouseFollowVerificationPresent = false
+        monitorMouseFollowVerificationDetection = nil
         safeZoneStabilizer.reset()
         monitorZoneOutside = false
         monitorStatusText = status
@@ -937,7 +1198,8 @@ enum WorkerConfigurationValidator {
         }
         let enabled = settings.buffs.filter(\.enabled)
         var errors: [String] = []
-        if enabled.isEmpty && mode != .followHeal {
+        let ropePartyMode = mode == .temple && settings.templeFunction == .ropeParty
+        if enabled.isEmpty && mode != .followHeal && !ropePartyMode {
             errors.append("请至少启用一个 Buff")
         }
         for buff in enabled {
@@ -946,7 +1208,9 @@ enum WorkerConfigurationValidator {
             } else if KeyCodeMap.virtualKeyCode(for: buff.key) == nil {
                 errors.append("Buff #\(buff.id) 的按键“\(buff.key)”不受支持")
             }
-            if buff.duration < AppConstants.minInterval || buff.duration > AppConstants.maxInterval {
+            let loungeIgnoresDuration = mode == .temple && settings.templeFunction == .lounge
+            if !loungeIgnoresDuration,
+               (buff.duration < AppConstants.minInterval || buff.duration > AppConstants.maxInterval) {
                 errors.append("Buff #\(buff.id) 的持续时间需为 \(AppConstants.minInterval)～\(Int(AppConstants.maxInterval)) 秒")
             }
         }
@@ -962,8 +1226,20 @@ enum WorkerConfigurationValidator {
                 if KeyCodeMap.virtualKeyCode(for: settings.jumpKey) == nil {
                     errors.append("跳跃键“\(settings.jumpKey)”不受支持")
                 }
-            case .lounge, .ropeParty:
-                errors.append("神殿模式的“\(settings.templeFunction.title)”功能配置尚未开放")
+            case .lounge:
+                if settings.loungeMoveMinMinutes < 1 || settings.loungeMoveMinMinutes > 24 * 60 {
+                    errors.append("休息室防卡最短间隔需为 1～1440 分钟")
+                }
+                if settings.loungeMoveMaxMinutes < 1 || settings.loungeMoveMaxMinutes > 24 * 60 {
+                    errors.append("休息室防卡最长间隔需为 1～1440 分钟")
+                }
+                if settings.loungeMoveMinMinutes > settings.loungeMoveMaxMinutes {
+                    errors.append("休息室防卡最短间隔不能大于最长间隔")
+                }
+            case .ropeParty:
+                if settings.characterName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    errors.append("挂绳组队需要先填写并保存角色名称")
+                }
             }
         }
         if mode == .followHeal {

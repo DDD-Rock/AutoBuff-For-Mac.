@@ -74,6 +74,45 @@ struct EXPFixedFontRecognizerTests {
         #expect(reading.percent == 11.99)
     }
 
+    @Test func productionPPOCRRecognizesNativeLayoutScreenshot() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "Fixtures/EXP/exp_1355x882_78660262_11_99.png"
+            )
+        let crop = try #require(loadImage(fixtureURL))
+        var frame = ImageBuffer(
+            width: 1_355,
+            height: 882,
+            bgr: [UInt8](repeating: 18, count: 1_355 * 882 * 3)
+        )
+        pasteAllPixels(crop, into: &frame, x: 710, y: 820)
+
+        #expect(EXPPaddleOCRRecognizer.isAvailable)
+        let reading = try #require(EXPHybridRecognizer.recognize(in: frame))
+
+        #expect(reading.currentEXP == 78_660_262)
+        #expect(reading.percent == 11.99)
+        #expect(reading.confidence >= 0.55)
+        #expect(reading.recognitionMethod == .ppOCRv4)
+    }
+
+    @Test func productionPPOCRAllowsZeroEXP() throws {
+        let panel = try makePanel(currentEXP: "0", percentage: "0.0")
+        var frame = ImageBuffer(
+            width: 900,
+            height: 500,
+            bgr: [UInt8](repeating: 18, count: 900 * 500 * 3)
+        )
+        paste(panel, into: &frame, x: 358, y: 440)
+
+        let reading = try #require(EXPHybridRecognizer.recognize(in: frame))
+
+        #expect(reading.currentEXP == 0)
+        #expect(reading.percent == 0)
+        #expect(reading.recognitionMethod == .ppOCRv4)
+    }
+
     @Test func includesNativeLayoutWhenAnchorSuggestsLargerScale() {
         let candidates = EXPLayoutScaleSearch.candidates(anchorScale: 1.15)
 
@@ -104,13 +143,34 @@ struct EXPFixedFontRecognizerTests {
         let reading = EXPRecognitionResult(
             currentEXP: 6_528,
             percent: 0.01,
-            confidence: 0.98
+            confidence: 0.98,
+            recognitionMethod: .ppOCRv4
         )
         var stabilizer = EXPRecognitionStabilizer()
 
         #expect(stabilizer.update(reading) == nil)
         #expect(stabilizer.update(reading) == nil)
         #expect(stabilizer.update(reading) == reading)
+    }
+
+    @Test func stabilizerTracksRecognitionMethodChanges() {
+        let template = EXPRecognitionResult(
+            currentEXP: 6_528,
+            percent: 0.01,
+            confidence: 0.92
+        )
+        let ocr = EXPRecognitionResult(
+            currentEXP: 6_528,
+            percent: 0.01,
+            confidence: 0.92,
+            recognitionMethod: .ppOCRv4
+        )
+        var stabilizer = EXPRecognitionStabilizer(requiredMatches: 2, toleratedMisses: 1)
+
+        #expect(stabilizer.update(template) == nil)
+        #expect(stabilizer.update(template)?.recognitionMethod == .fixedTemplate)
+        #expect(stabilizer.update(ocr)?.recognitionMethod == .fixedTemplate)
+        #expect(stabilizer.update(ocr)?.recognitionMethod == .ppOCRv4)
     }
 
     @Test func exposesTemplateLocatedPanelForOCR() throws {

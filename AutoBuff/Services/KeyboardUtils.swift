@@ -20,6 +20,21 @@ enum KeyboardUtils {
         guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: keyDown) else { return }
         event.post(tap: .cghidEventTap)
     }
+
+    static func postText(_ text: String) {
+        for character in text {
+            let utf16 = Array(String(character).utf16)
+            guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
+                continue
+            }
+            keyDown.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+            keyUp.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+            keyDown.post(tap: .cghidEventTap)
+            Thread.sleep(forTimeInterval: Double.random(in: 0.05...0.12))
+            keyUp.post(tap: .cghidEventTap)
+        }
+    }
     
     enum InputError: Error, LocalizedError {
         case unsupportedKey(String)

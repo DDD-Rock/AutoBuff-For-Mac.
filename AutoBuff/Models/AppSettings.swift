@@ -76,12 +76,18 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 6
 
     var schemaVersion: Int = currentSchemaVersion
     var mode: AppMode = .deadFlower
     var returnToMarket: Bool = true
     var templeFunction: TempleFunction = .freeEntry
+    var characterName: String = ""
+    var loungeMoveMinMinutes: Int = 15
+    var loungeMoveMaxMinutes: Int = 30
+    var ropePartyTeamID: Int64? = nil
+    var ropePartyIsLeader: Bool = false
+    var ropePartyInviteRoleNames: [String] = []
     var jumpKey: String = "Alt"
     var healSkillKey: String = ""
     var healAnchorX: Int? = nil
@@ -101,10 +107,12 @@ struct AppSettings: Codable, Equatable {
     var preSkillMoveMode: PreSkillMoveMode = .rightOnly
     var manualPortalX: Int? = nil
     var manualPortalY: Int? = nil
+    var portalWidthThreshold: Double = 2.5
     var mapTopologies: [MapTopology] = []
     var monitorDisplayMode: MonitorDisplayMode = .minimapWithAnnotations
     var monitorServerBaseURL: String = "http://106.52.208.129:28671"
     var monitorAccountUsername: String = ""
+    var monitorAccountNickname: String = ""
     var monitorSafeZone: MonitorSafeZone? = nil
     var buffs: [BuffConfig]
 
@@ -122,6 +130,12 @@ extension AppSettings {
         case mode
         case returnToMarket
         case templeFunction
+        case characterName
+        case loungeMoveMinMinutes
+        case loungeMoveMaxMinutes
+        case ropePartyTeamID
+        case ropePartyIsLeader
+        case ropePartyInviteRoleNames
         case jumpKey
         case healSkillKey
         case healAnchorX
@@ -141,11 +155,13 @@ extension AppSettings {
         case preSkillMoveMode
         case manualPortalX
         case manualPortalY
+        case portalWidthThreshold
         case mapTopology
         case mapTopologies
         case monitorDisplayMode
         case monitorServerBaseURL
         case monitorAccountUsername
+        case monitorAccountNickname
         case monitorSafeZone
         case buffs
     }
@@ -161,6 +177,21 @@ extension AppSettings {
             TempleFunction.self,
             forKey: .templeFunction
         ) ?? .freeEntry
+        self.characterName = try container.decodeIfPresent(String.self, forKey: .characterName) ?? ""
+        self.loungeMoveMinMinutes = try container.decodeIfPresent(
+            Int.self,
+            forKey: .loungeMoveMinMinutes
+        ) ?? 15
+        self.loungeMoveMaxMinutes = try container.decodeIfPresent(
+            Int.self,
+            forKey: .loungeMoveMaxMinutes
+        ) ?? 30
+        self.ropePartyTeamID = try container.decodeIfPresent(Int64.self, forKey: .ropePartyTeamID)
+        self.ropePartyIsLeader = try container.decodeIfPresent(Bool.self, forKey: .ropePartyIsLeader) ?? false
+        self.ropePartyInviteRoleNames = try container.decodeIfPresent(
+            [String].self,
+            forKey: .ropePartyInviteRoleNames
+        ) ?? []
         self.jumpKey = try container.decodeIfPresent(String.self, forKey: .jumpKey) ?? "Alt"
         self.healSkillKey = try container.decodeIfPresent(String.self, forKey: .healSkillKey) ?? ""
         self.healAnchorX = try container.decodeIfPresent(Int.self, forKey: .healAnchorX)
@@ -180,6 +211,10 @@ extension AppSettings {
         self.preSkillMoveMode = try container.decodeIfPresent(PreSkillMoveMode.self, forKey: .preSkillMoveMode) ?? .rightOnly
         self.manualPortalX = try container.decodeIfPresent(Int.self, forKey: .manualPortalX)
         self.manualPortalY = try container.decodeIfPresent(Int.self, forKey: .manualPortalY)
+        self.portalWidthThreshold = try container.decodeIfPresent(
+            Double.self,
+            forKey: .portalWidthThreshold
+        ) ?? 2.5
         self.mapTopologies = try container.decodeIfPresent([MapTopology].self, forKey: .mapTopologies)
             ?? container.decodeIfPresent(MapTopology.self, forKey: .mapTopology).map { [$0] }
             ?? []
@@ -195,6 +230,10 @@ extension AppSettings {
             String.self,
             forKey: .monitorAccountUsername
         ) ?? ""
+        self.monitorAccountNickname = try container.decodeIfPresent(
+            String.self,
+            forKey: .monitorAccountNickname
+        ) ?? ""
         self.monitorSafeZone = try container.decodeIfPresent(
             MonitorSafeZone.self,
             forKey: .monitorSafeZone
@@ -208,6 +247,12 @@ extension AppSettings {
         try container.encode(mode, forKey: .mode)
         try container.encode(returnToMarket, forKey: .returnToMarket)
         try container.encode(templeFunction, forKey: .templeFunction)
+        try container.encode(characterName, forKey: .characterName)
+        try container.encode(loungeMoveMinMinutes, forKey: .loungeMoveMinMinutes)
+        try container.encode(loungeMoveMaxMinutes, forKey: .loungeMoveMaxMinutes)
+        try container.encodeIfPresent(ropePartyTeamID, forKey: .ropePartyTeamID)
+        try container.encode(ropePartyIsLeader, forKey: .ropePartyIsLeader)
+        try container.encode(ropePartyInviteRoleNames, forKey: .ropePartyInviteRoleNames)
         try container.encode(jumpKey, forKey: .jumpKey)
         try container.encode(healSkillKey, forKey: .healSkillKey)
         try container.encodeIfPresent(healAnchorX, forKey: .healAnchorX)
@@ -227,16 +272,24 @@ extension AppSettings {
         try container.encode(preSkillMoveMode, forKey: .preSkillMoveMode)
         try container.encodeIfPresent(manualPortalX, forKey: .manualPortalX)
         try container.encodeIfPresent(manualPortalY, forKey: .manualPortalY)
+        try container.encode(portalWidthThreshold, forKey: .portalWidthThreshold)
         try container.encode(mapTopologies, forKey: .mapTopologies)
         try container.encode(monitorDisplayMode, forKey: .monitorDisplayMode)
         try container.encode(monitorServerBaseURL, forKey: .monitorServerBaseURL)
         try container.encode(monitorAccountUsername, forKey: .monitorAccountUsername)
+        try container.encode(monitorAccountNickname, forKey: .monitorAccountNickname)
         try container.encodeIfPresent(monitorSafeZone, forKey: .monitorSafeZone)
         try container.encode(buffs, forKey: .buffs)
     }
 }
 
 extension AppSettings {
+    var loungeMoveIntervalMinutes: ClosedRange<Int> {
+        let minimum = max(1, min(loungeMoveMinMinutes, loungeMoveMaxMinutes))
+        let maximum = min(24 * 60, max(loungeMoveMinMinutes, loungeMoveMaxMinutes))
+        return minimum...max(minimum, maximum)
+    }
+
     var followHealAdjustDurationMS: ClosedRange<Int> {
         let minValue = max(50, min(followHealAdjustMinMS, followHealAdjustMaxMS))
         let maxValue = min(1000, max(followHealAdjustMinMS, followHealAdjustMaxMS))

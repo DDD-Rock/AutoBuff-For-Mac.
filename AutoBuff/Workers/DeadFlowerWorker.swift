@@ -4,11 +4,24 @@ import Foundation
 enum PortalNavigation {
     // ScreenCaptureKit captures this app at Quartz point resolution. On a
     // Retina display, the Windows baseline's 5 native pixels are about 2.5
-    // captured points. Keeping 5 here stops the character visibly too early.
-    static let arrivalTolerance: CGFloat = 2.5
+    // captured points. Keep that as the default while allowing per-user tuning.
+    static let defaultWidthThreshold: CGFloat = 2.5
+    static let fineAdjustmentMargin: CGFloat = 4
 
-    static func hasArrived(playerX: CGFloat, portalX: CGFloat) -> Bool {
-        abs(portalX - playerX) <= arrivalTolerance
+    static func widthThreshold(from settings: AppSettings) -> CGFloat {
+        min(20, max(0.5, CGFloat(settings.portalWidthThreshold)))
+    }
+
+    static func hasArrived(
+        playerX: CGFloat,
+        portalX: CGFloat,
+        widthThreshold: CGFloat = defaultWidthThreshold
+    ) -> Bool {
+        abs(portalX - playerX) < widthThreshold
+    }
+
+    static func shouldFineAdjust(distance: CGFloat, widthThreshold: CGFloat) -> Bool {
+        abs(distance) < widthThreshold + fineAdjustmentMargin
     }
 }
 
@@ -149,6 +162,7 @@ final class DeadFlowerWorker: ObservableObject {
                     if await leaveMarket(
                         windowID: windowID,
                         jumpKey: settings.jumpKey,
+                        portalWidthThreshold: PortalNavigation.widthThreshold(from: settings),
                         manualPortal: manualPortal,
                         cachedPortal: &cachedPortal
                     ) {
@@ -267,6 +281,7 @@ final class DeadFlowerWorker: ObservableObject {
     private func leaveMarket(
         windowID: CGWindowID,
         jumpKey: String,
+        portalWidthThreshold: CGFloat,
         manualPortal: CGPoint?,
         cachedPortal: inout CGPoint?
     ) async -> Bool {
@@ -309,6 +324,8 @@ final class DeadFlowerWorker: ObservableObject {
         var stuckCount = 0
         var missingPlayerCount = 0
         var enteredPortal = false
+        var isFineAdjusting = false
+        var directApproachDirection: HumanInput.Direction?
         
         var initialPlayer: CGPoint?
         for _ in 0..<10 where isRunning {
@@ -335,7 +352,11 @@ final class DeadFlowerWorker: ObservableObject {
         
         let initialDistance = portal.x - initialPlayer.x
         log("导航坐标: 玩家X=\(format(initialPlayer.x))，传送门X=\(format(portal.x))，距离=\(format(initialDistance))")
-        if PortalNavigation.hasArrived(playerX: initialPlayer.x, portalX: portal.x) {
+        if PortalNavigation.hasArrived(
+            playerX: initialPlayer.x,
+            portalX: portal.x,
+            widthThreshold: portalWidthThreshold
+        ) {
             guard await ensureGameFocus(windowID: windowID, reason: "进入传送门") else {
                 log("❌ 进入传送门前无法确认游戏窗口焦点")
                 return false
@@ -343,8 +364,18 @@ final class DeadFlowerWorker: ObservableObject {
             log("已到达传送门范围，按上键进入（距离=\(format(initialDistance))）")
             await human.usePortal()
             enteredPortal = true
+        } else if PortalNavigation.shouldFineAdjust(
+            distance: initialDistance,
+            widthThreshold: portalWidthThreshold
+        ) {
+            // Already close enough that a full hold is likely to overshoot.
+            // The first short tap is still a direct attempt; correction mode
+            // only continues if that attempt misses the target range.
+            isFineAdjusting = true
         } else {
-            currentDirection = initialDistance > 0 ? .right : .left
+            let direction: HumanInput.Direction = initialDistance > 0 ? .right : .left
+            directApproachDirection = direction
+            currentDirection = direction
             guard await startMoving(currentDirection!, windowID: windowID) else {
                 log("❌ 导航开始前无法确认游戏焦点")
                 return false
@@ -406,10 +437,13 @@ final class DeadFlowerWorker: ObservableObject {
             if attempt % 10 == 0 {
                 log("导航中: 玩家X=\(format(player.x))，目标X=\(format(portal.x))，距离=\(format(distance))")
             }
-            if PortalNavigation.hasArrived(playerX: player.x, portalX: portal.x) {
+            if PortalNavigation.hasArrived(
+                playerX: player.x,
+                portalX: portal.x,
+                widthThreshold: portalWidthThreshold
+            ) {
                 await human.stopMove()
                 currentDirection = nil
-                await randomSleep(0.1...0.3)
                 guard await ensureGameFocus(windowID: windowID, reason: "进入传送门") else {
                     log("❌ 进入传送门前无法确认游戏窗口焦点")
                     break
@@ -420,36 +454,76 @@ final class DeadFlowerWorker: ObservableObject {
                 break
             }
             
-            if let lastPlayerX, abs(player.x - lastPlayerX) <= 1 {
-                stuckCount += 1
-            } else {
-                stuckCount = 0
-            }
-            lastPlayerX = player.x
-            
-            if stuckCount >= 5 {
-                await human.stopMove()
-                currentDirection = nil
-                log("检测到移动停滞（游戏焦点正常），重新按方向键：\(minimap.lastPlayerDetectionSummary)")
-                await randomSleep(0.1...0.3)
-                stuckCount = 0
-            }
-            
-            let neededDirection: HumanInput.Direction =
-                distance > PortalNavigation.arrivalTolerance ? .right : .left
-            if currentDirection != neededDirection {
-                if currentDirection != nil {
-                    log("已越过目标，切换移动方向")
-                    await human.stopMove()
-                    await randomSleep(0.1...0.2)
+            if currentDirection != nil {
+                if let lastPlayerX, abs(player.x - lastPlayerX) <= 1 {
+                    stuckCount += 1
+                } else {
+                    stuckCount = 0
                 }
+                lastPlayerX = player.x
+
+                if stuckCount >= 5 {
+                    await human.stopMove()
+                    currentDirection = nil
+                    log("检测到移动停滞（游戏焦点正常），重新按方向键：\(minimap.lastPlayerDetectionSummary)")
+                    await randomSleep(0.1...0.3)
+                    stuckCount = 0
+                }
+            } else {
+                lastPlayerX = nil
+                stuckCount = 0
+            }
+
+            let neededDirection: HumanInput.Direction = distance > 0 ? .right : .left
+            if isFineAdjusting {
+                if currentDirection != nil {
+                    await human.stopMove()
+                    currentDirection = nil
+                    log("首次接近未进入范围，松开方向键准备微调")
+                    await randomSleep(0.10...0.18)
+                    continue
+                }
+                guard await ensureGameFocus(windowID: windowID, reason: "传送门微调") else {
+                    log("❌ 微调前无法确认游戏窗口焦点")
+                    break
+                }
+                await human.tapDirection(
+                    neededDirection,
+                    holdMS: 60...110,
+                    intervalMS: 80...160
+                )
+                continue
+            }
+
+            if let directApproachDirection,
+               neededDirection != directApproachDirection {
+                if currentDirection != nil {
+                    await human.stopMove()
+                    currentDirection = nil
+                }
+                isFineAdjusting = true
+                log("首次直行越过传送门，切换为自然短按微调")
+                await randomSleep(0.10...0.18)
+                continue
+            }
+
+            if currentDirection != neededDirection {
                 guard await startMoving(neededDirection, windowID: windowID) else {
                     log("❌ 移动前无法确认游戏窗口焦点")
                     break
                 }
                 currentDirection = neededDirection
             }
-            await randomSleep(0.15...0.25)
+            if PortalNavigation.shouldFineAdjust(
+                distance: distance,
+                widthThreshold: portalWidthThreshold
+            ) {
+                // Keep walking on the first approach, but sample more often so
+                // the center is likely to be observed inside the target band.
+                await randomSleep(0.06...0.10)
+            } else {
+                await randomSleep(0.15...0.25)
+            }
         }
         
         await human.stopMove()

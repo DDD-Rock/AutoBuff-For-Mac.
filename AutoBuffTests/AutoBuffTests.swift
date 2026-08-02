@@ -21,10 +21,10 @@ struct SettingsManagerTests {
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
     }
 
-    @Test func sidebarUsesTheFixedNarrowLayout() {
-        #expect(MainWindowLayout.sidebarWidth == 56)
-        #expect(MainWindowLayout.minimumContentWidth == 540)
-        #expect(MainWindowLayout.preferredContentWidth == 600)
+    @Test func sidebarUsesTheLabeledLayout() {
+        #expect(MainWindowLayout.sidebarWidth == 132)
+        #expect(MainWindowLayout.minimumContentWidth == 616)
+        #expect(MainWindowLayout.preferredContentWidth == 680)
     }
 
     @Test func mainWindowHeightAdaptsToAvailableScreenSpace() {
@@ -139,6 +139,7 @@ struct SettingsManagerTests {
         #expect(settings.buffs[0].key == "1")
         #expect(settings.preSkillMoveMode == .rightOnly)
         #expect(settings.templeFunction == .freeEntry)
+        #expect(settings.portalWidthThreshold == 2.5)
     }
 
     @Test func saveAndLoadRoundTrip() throws {
@@ -148,6 +149,7 @@ struct SettingsManagerTests {
         var settings = AppSettings.default
         settings.manualPortalX = 42
         settings.manualPortalY = 88
+        settings.portalWidthThreshold = 4.5
         settings.movementMode = .right
         settings.preSkillMoveMode = .rightOnly
         settings.randomBehaviorValue = 15
@@ -158,6 +160,7 @@ struct SettingsManagerTests {
 
         #expect(loaded.manualPortalX == 42)
         #expect(loaded.manualPortalY == 88)
+        #expect(loaded.portalWidthThreshold == 4.5)
         #expect(loaded.movementMode == .right)
         #expect(loaded.preSkillMoveMode == .rightOnly)
         #expect(loaded.randomBehaviorValue == 15)
@@ -731,8 +734,18 @@ struct SettingsManagerTests {
     }
 
     @Test func portalArrivalUsesPointResolutionTolerance() {
-        #expect(PortalNavigation.hasArrived(playerX: 30, portalX: 32.5))
+        #expect(PortalNavigation.hasArrived(playerX: 30, portalX: 32.4))
+        #expect(!PortalNavigation.hasArrived(playerX: 30, portalX: 32.5))
         #expect(!PortalNavigation.hasArrived(playerX: 30, portalX: 35))
+        #expect(PortalNavigation.hasArrived(playerX: 30, portalX: 34.9, widthThreshold: 5))
+        #expect(!PortalNavigation.hasArrived(playerX: 30, portalX: 35, widthThreshold: 5))
+
+        var settings = AppSettings.default
+        settings.portalWidthThreshold = 4.5
+        #expect(PortalNavigation.widthThreshold(from: settings) == 4.5)
+
+        #expect(PortalNavigation.shouldFineAdjust(distance: 6, widthThreshold: 2.5))
+        #expect(!PortalNavigation.shouldFineAdjust(distance: 7, widthThreshold: 2.5))
     }
 
     @Test func dialogConfirmButtonValidationAcceptsOrangeButtonBackground() {
@@ -937,6 +950,22 @@ struct SettingsManagerTests {
         let result = ColorDetector.detectPlayerMarker(in: image)
         #expect(result.point == CGPoint(x: 16.5, y: 6))
         #expect(result.selectedArea == 12)
+    }
+
+    @Test func playerDetectionUsesMarkerBoundsCenterInsteadOfColoredPixelCentroid() {
+        let width = 20
+        let height = 12
+        var data = [UInt8](repeating: 20, count: width * height * 3)
+        for (x, y) in [(10, 5), (11, 5), (12, 5), (10, 6)] {
+            let index = (y * width + x) * 3
+            data[index] = 0
+            data[index + 1] = 255
+            data[index + 2] = 255
+        }
+        let image = ImageBuffer(width: width, height: height, bgr: data)
+
+        let result = ColorDetector.detectPlayerMarker(in: image)
+        #expect(result.point == CGPoint(x: 11, y: 5.5))
     }
 
     @Test func playerDetectionRejectsThinYellowUiGlyphs() {
@@ -1623,6 +1652,20 @@ struct SettingsManagerTests {
         #expect((points.last?.x ?? 0) > 0.85)
         #expect(zip(points, points.dropFirst()).allSatisfy { pair in pair.0.x < pair.1.x })
         #expect(points.allSatisfy { $0.y < 0.75 })
+    }
+
+    @Test func platformTraceBridgesAShortDetectionGap() {
+        let size = CGSize(width: 120, height: 90)
+        let samples = Array(stride(from: CGFloat(8), through: 50, by: 2)).map {
+            CGPoint(x: $0, y: 42)
+        } + Array(stride(from: CGFloat(62), through: 112, by: 2)).map {
+            CGPoint(x: $0, y: 42.5)
+        }
+
+        let points = PlatformTraceBuilder.buildPolyline(from: samples, canvasSize: size)
+
+        #expect((points.first?.x ?? 1) < 0.1)
+        #expect((points.last?.x ?? 0) > 0.9)
     }
 
     @Test func legacyMapTopologyWithoutPortalsMigratesToEmptyPortalList() throws {

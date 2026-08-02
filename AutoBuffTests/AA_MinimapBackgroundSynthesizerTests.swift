@@ -104,4 +104,39 @@ struct MinimapBackgroundSynthesizerTests {
             Issue.record("收到非预期错误：\(error)")
         }
     }
+
+    @Test func mergesOnlyNewlyUncoveredMarkerPixelsWithoutBlurringCleanPixels() throws {
+        let width = 12
+        let height = 8
+        var clean = [UInt8](repeating: 18, count: width * height * 3)
+        for x in 1..<(width - 1) {
+            let offset = (4 * width + x) * 3
+            clean[offset] = 210
+            clean[offset + 1] = 210
+            clean[offset + 2] = 210
+        }
+        var stored = clean
+        for y in 3...5 {
+            for x in 4...6 {
+                let offset = (y * width + x) * 3
+                stored[offset] = 0
+                stored[offset + 1] = 220
+                stored[offset + 2] = 255
+            }
+        }
+        var current = clean
+        let newMarkerOffset = (2 * width + 9) * 3
+        current[newMarkerOffset] = 20
+        current[newMarkerOffset + 1] = 45
+        current[newMarkerOffset + 2] = 235
+
+        let result = try MinimapBackgroundSynthesizer.mergeReference(
+            stored: ImageBuffer(width: width, height: height, bgr: stored),
+            current: ImageBuffer(width: width, height: height, bgr: current)
+        )
+
+        #expect(result.replacedPixelCount > 0)
+        #expect(result.buffer.bgr == clean)
+        #expect(result.buffer.bgr[0] == stored[0])
+    }
 }

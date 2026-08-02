@@ -119,3 +119,105 @@ enum RuneAlertImageTestPolicy {
     /// 必须大于服务端扫描周期，确保至少有一轮落在窗口内。
     static let stateHoldDuration = Duration.seconds(8)
 }
+
+/// 监控面板图片回放支持的告警类型。
+enum MonitorImageTestKind: String, CaseIterable, Identifiable {
+    case rune
+    case mouseFollowVerification
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .rune: "符文"
+        case .mouseFollowVerification: "测谎"
+        }
+    }
+
+    var imagePrompt: String {
+        switch self {
+        case .rune: "符文截图"
+        case .mouseFollowVerification: "测谎弹窗截图"
+        }
+    }
+}
+
+/// 单张图片的鼠标跟随验证（测谎）回放结果。
+struct MouseFollowVerificationImageTestItem: Equatable, Sendable {
+    let fileName: String
+    let detection: MouseFollowVerificationDetection?
+    let isUnreadable: Bool
+
+    var isDetected: Bool { detection != nil }
+}
+
+struct MouseFollowVerificationImageTestReport: Equatable, Sendable {
+    let items: [MouseFollowVerificationImageTestItem]
+
+    var detectedItems: [MouseFollowVerificationImageTestItem] { items.filter(\.isDetected) }
+    var unreadableItems: [MouseFollowVerificationImageTestItem] { items.filter(\.isUnreadable) }
+    var missedItems: [MouseFollowVerificationImageTestItem] {
+        items.filter { !$0.isUnreadable && !$0.isDetected }
+    }
+    var strongest: MouseFollowVerificationImageTestItem? {
+        detectedItems.max {
+            ($0.detection?.confidence ?? 0) < ($1.detection?.confidence ?? 0)
+        }
+    }
+
+    var summary: String {
+        guard !items.isEmpty else { return "没有选择图片" }
+
+        var parts: [String] = []
+        if detectedItems.count == items.count {
+            parts.append("\(items.count) 张全部识别到测谎弹窗")
+        } else if detectedItems.isEmpty {
+            parts.append("\(items.count) 张均未识别到测谎弹窗")
+        } else {
+            parts.append("\(items.count) 张中 \(detectedItems.count) 张识别到测谎弹窗")
+        }
+        let confidences = detectedItems.compactMap { $0.detection?.confidence }.sorted()
+        if let lowest = confidences.first, let highest = confidences.last {
+            let low = Self.percentText(lowest)
+            let high = Self.percentText(highest)
+            parts.append("置信度 " + (low == high ? low : "\(low)–\(high)"))
+        }
+        if !missedItems.isEmpty {
+            parts.append("未识别：" + Self.nameList(missedItems))
+        }
+        if !unreadableItems.isEmpty {
+            parts.append("无法读取：" + Self.nameList(unreadableItems))
+        }
+        return parts.joined(separator: "，")
+    }
+
+    private static func percentText(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private static func nameList(_ items: [MouseFollowVerificationImageTestItem]) -> String {
+        let names = items.map(\.fileName)
+        guard names.count > 3 else { return names.joined(separator: "、") }
+        return names.prefix(3).joined(separator: "、") + " 等 \(names.count) 张"
+    }
+}
+
+enum MouseFollowVerificationImageTestRunner {
+    static func run(urls: [URL]) -> MouseFollowVerificationImageTestReport {
+        let items = urls.map { url -> MouseFollowVerificationImageTestItem in
+            guard let buffer = RuneAlertImageLoader.loadBuffer(at: url) else {
+                return MouseFollowVerificationImageTestItem(
+                    fileName: url.lastPathComponent,
+                    detection: nil,
+                    isUnreadable: true
+                )
+            }
+            return MouseFollowVerificationImageTestItem(
+                fileName: url.lastPathComponent,
+                detection: MouseFollowVerificationDetector.detect(in: buffer),
+                isUnreadable: false
+            )
+        }
+        return MouseFollowVerificationImageTestReport(items: items)
+    }
+}

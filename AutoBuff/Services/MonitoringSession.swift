@@ -88,6 +88,11 @@ enum MonitorFrameScheduler {
         windowFrameIndex.isMultiple(of: runeAlertFrameInterval)
     }
 
+    /// 鼠标跟随验证会很快变暗，整窗任务的每一帧都要识别，最坏延迟约 500ms。
+    static func shouldDetectMouseFollowVerification(windowFrameIndex _: Int) -> Bool {
+        true
+    }
+
     static func seconds(in duration: Duration) -> Double {
         Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1_000_000_000_000_000_000
@@ -112,6 +117,11 @@ final class MonitoringSession {
     var onEXPStatus: ((String) -> Void)?
     /// 符文提示状态。`isPresent` 已经过防抖，`detection` 仅在出现时携带。
     var onRuneAlert: ((_ isPresent: Bool, _ detection: RuneAlertDetection?) -> Void)?
+    /// 「寻找透明图形」鼠标跟随验证弹窗状态。
+    var onMouseFollowVerification: ((
+        _ isPresent: Bool,
+        _ detection: MouseFollowVerificationDetection?
+    ) -> Void)?
     var onStopped: ((String) -> Void)?
 
     private let minimap = MinimapMonitor()
@@ -136,6 +146,7 @@ final class MonitoringSession {
         onEXPReading?(nil)
         onEXPStatus?("正在识别 EXP...")
         onRuneAlert?(false, nil)
+        onMouseFollowVerification?(false, nil)
         expTask = Task { [weak self] in
             await self?.runWindowRecognition(windowID: windowID, runID: currentRunID)
         }
@@ -158,11 +169,12 @@ final class MonitoringSession {
         minimap.clearMinimapRegion()
     }
 
-    /// 整窗识别任务：每 500ms 抓一帧完整游戏窗口，EXP 每帧识别，
-    /// 符文提示每两帧识别一次（约每秒一次）。两者共用同一帧，不额外截图。
+    /// 整窗识别任务：每 500ms 抓一帧完整游戏窗口，EXP 与鼠标跟随验证每帧识别，
+    /// 符文提示每两帧识别一次（约每秒一次）。所有任务共用同一帧，不额外截图。
     private func runWindowRecognition(windowID: CGWindowID, runID currentRunID: UUID) async {
         var stabilizer = EXPRecognitionStabilizer()
         var runeStabilizer = RuneAlertStabilizer()
+        var verificationStabilizer = MouseFollowVerificationStabilizer()
         var consecutiveCaptureFailures = 0
         var windowFrameIndex = 0
 
@@ -172,8 +184,13 @@ final class MonitoringSession {
                 let shouldDetectRune = MonitorFrameScheduler.shouldDetectRuneAlert(
                     windowFrameIndex: windowFrameIndex
                 )
+                let shouldDetectVerification = MonitorFrameScheduler
+                    .shouldDetectMouseFollowVerification(windowFrameIndex: windowFrameIndex)
                 let analysis = await Task.detached(priority: .utility) {
                     (
+                        shouldDetectVerification
+                            ? MouseFollowVerificationDetector.detect(in: captured.buffer)
+                            : nil,
                         EXPHybridRecognizer.recognize(in: captured.buffer),
                         shouldDetectRune
                             ? RuneAlertDetector.detect(in: captured.buffer)
@@ -183,15 +200,24 @@ final class MonitoringSession {
                 consecutiveCaptureFailures = 0
                 windowFrameIndex &+= 1
 
+                if shouldDetectVerification {
+                    publishMouseFollowVerification(
+                        &verificationStabilizer,
+                        detection: analysis.0
+                    )
+                }
                 if shouldDetectRune {
-                    publishRuneAlert(&runeStabilizer, detection: analysis.1)
+                    publishRuneAlert(&runeStabilizer, detection: analysis.2)
                 }
 
-                let stable = stabilizer.update(analysis.0)
+                let stable = stabilizer.update(analysis.1)
                 onEXPReading?(stable)
                 if let stable {
-                    onEXPStatus?("已识别 EXP · 置信度 \(Int((stable.confidence * 100).rounded()))%")
-                } else if analysis.0 != nil {
+                    onEXPStatus?(
+                        "\(stable.recognitionMethod.displayName) · 置信度 "
+                            + "\(Int((stable.confidence * 100).rounded()))%"
+                    )
+                } else if analysis.1 != nil {
                     onEXPStatus?("正在确认 EXP 数值...")
                 } else {
                     onEXPStatus?("未识别到 EXP")
@@ -202,6 +228,7 @@ final class MonitoringSession {
                 onEXPReading?(stable)
                 // 读不到画面时不能继续声称符文提示还在，否则服务器会一直推送。
                 publishRuneAlert(&runeStabilizer, detection: nil)
+                publishMouseFollowVerification(&verificationStabilizer, detection: nil)
                 if consecutiveCaptureFailures == 1 || consecutiveCaptureFailures.isMultiple(of: 5) {
                     onEXPStatus?("EXP 画面读取失败")
                 }
@@ -219,6 +246,15 @@ final class MonitoringSession {
     ) {
         stabilizer.update(detection)
         onRuneAlert?(stabilizer.isPresent, stabilizer.latestDetection)
+    }
+
+    /// 与符文状态一样持续发新鲜心跳；客户端上报层负责 3 秒节流。
+    private func publishMouseFollowVerification(
+        _ stabilizer: inout MouseFollowVerificationStabilizer,
+        detection: MouseFollowVerificationDetection?
+    ) {
+        stabilizer.update(detection)
+        onMouseFollowVerification?(stabilizer.isPresent, stabilizer.latestDetection)
     }
 
     private func run(windowID: CGWindowID, maps: [MapTopology], runID currentRunID: UUID) async {
@@ -399,6 +435,7 @@ final class MonitoringSession {
         minimap.clearMinimapRegion()
         // 会话自行结束时也要撤销符文状态，否则服务器会按最后一次上报继续推送。
         onRuneAlert?(false, nil)
+        onMouseFollowVerification?(false, nil)
         onStopped?(reason)
     }
 

@@ -136,6 +136,10 @@ actor HumanInput {
         pressedNamedKeyCodes.removeAll()
     }
 
+    func typeText(_ text: String) {
+        KeyboardUtils.postText(text)
+    }
+
     func performJumpGrabRope(
         jumpKey: String,
         direction: Direction,

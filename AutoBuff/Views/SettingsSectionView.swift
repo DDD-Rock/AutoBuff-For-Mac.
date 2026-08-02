@@ -190,48 +190,78 @@ struct SettingsSectionView: View {
     }
     
     private var deadOptions: some View {
-        HStack(alignment: .top, spacing: 10) {
-            optionColumn("出市场后移动方式") {
-                Picker("", selection: $viewModel.settings.preSkillMoveMode) {
-                    ForEach(PreSkillMoveMode.allCases, id: \.self) { item in
-                        Text(item.label).tag(item)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            freeMarketPortalOption
 
-            Divider().frame(height: 44)
+            Divider().overlay(AppTheme.border)
 
-            optionColumn("跳跃键") {
-                Button(viewModel.settings.jumpKey) {
-                    viewModel.openKeyboard(for: .jumpKey)
-                }
-                .controlSize(.small)
-                .frame(width: 52)
-            }
-
-            Divider().frame(height: 44)
-
-            optionColumn("空闲时坐椅子") {
-                HStack(spacing: 6) {
-                    Toggle("", isOn: $viewModel.settings.sitChairEnabled)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                    if viewModel.settings.sitChairEnabled {
-                        Button(viewModel.settings.chairKey) {
-                            viewModel.openKeyboard(for: .chairKey)
+            HStack(alignment: .top, spacing: 10) {
+                optionColumn("出市场后移动方式") {
+                    Picker("", selection: $viewModel.settings.preSkillMoveMode) {
+                        ForEach(PreSkillMoveMode.allCases, id: \.self) { item in
+                            Text(item.label).tag(item)
                         }
-                        .controlSize(.small)
-                        .frame(width: 42)
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Divider().frame(height: 44)
+
+                optionColumn("跳跃键") {
+                    Button(viewModel.settings.jumpKey) {
+                        viewModel.openKeyboard(for: .jumpKey)
+                    }
+                    .controlSize(.small)
+                    .frame(width: 52)
+                }
+
+                Divider().frame(height: 44)
+
+                optionColumn("空闲时坐椅子") {
+                    HStack(spacing: 6) {
+                        Toggle("", isOn: $viewModel.settings.sitChairEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                        if viewModel.settings.sitChairEnabled {
+                            Button(viewModel.settings.chairKey) {
+                                viewModel.openKeyboard(for: .chairKey)
+                            }
+                            .controlSize(.small)
+                            .frame(width: 42)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+            .frame(minHeight: 44)
         }
-        .frame(minHeight: 44)
         .allowsHitTesting(!viewModel.isRunning)
+    }
+
+    private var freeMarketPortalOption: some View {
+        HStack(spacing: 10) {
+            Button {
+                Task { await viewModel.requestPortalMarker() }
+            } label: {
+                if viewModel.isCheckingPortalMarker {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Label("自由市场传送门", systemImage: "mappin.and.ellipse")
+                }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(AppTheme.accent)
+            .disabled(viewModel.isCheckingPortalMarker)
+            .accessibilityIdentifier("portal.marker")
+            Text(viewModel.settings.manualPortalX == nil ? "自动检测" : "已手动标记")
+                .font(.system(size: 10))
+                .foregroundStyle(AppTheme.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 24)
     }
 
     private var templeOptions: some View {
@@ -255,17 +285,79 @@ struct SettingsSectionView: View {
             switch viewModel.settings.templeFunction {
             case .freeEntry:
                 deadOptions
-            case .lounge, .ropeParty:
-                Label(
-                    "“\(viewModel.settings.templeFunction.title)”的专属配置将在后续补充",
-                    systemImage: "clock.badge"
-                )
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(AppTheme.textSecondary)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            case .lounge:
+                loungeOptions
+            case .ropeParty:
+                ropePartyOptions
             }
         }
         .allowsHitTesting(!viewModel.isRunning)
+    }
+
+    private var loungeOptions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Label("防卡移动间隔", systemImage: "figure.walk")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Spacer()
+                TextField("最短", value: $viewModel.settings.loungeMoveMinMinutes, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 58)
+                    .accessibilityIdentifier("temple.lounge.moveMinMinutes")
+                Text("至")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.textSecondary)
+                TextField("最长", value: $viewModel.settings.loungeMoveMaxMinutes, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 58)
+                    .accessibilityIdentifier("temple.lounge.moveMaxMinutes")
+                Text("分钟")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+            Text("启动、人数增加或自动接受组队后释放全部 BUFF，切换到队伍频道并随机发送自然喊话；倒计时结束不会释放。")
+                .font(.system(size: 10))
+                .foregroundStyle(AppTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+    }
+
+    private var ropePartyOptions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("角色名称", systemImage: "person.text.rectangle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                TextField("游戏内角色名", text: $viewModel.settings.characterName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 148, maxWidth: 240)
+                    .accessibilityIdentifier("temple.ropeParty.characterName")
+                Button("保存") {
+                    Task { await viewModel.saveCharacterName() }
+                }
+                .controlSize(.small)
+                .disabled(!viewModel.remoteMonitorAuthenticated)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                Button("客户端管理") {
+                    viewModel.openClientManagementPage()
+                }
+                .controlSize(.small)
+                Button(viewModel.remoteMonitorLinkCopied ? "已复制" : "复制链接") {
+                    viewModel.copyClientManagementPageLink()
+                }
+                .controlSize(.small)
+            }
+            Text("队伍由客户端管理网页统一创建；保存后会自动切换模式、开启自动同意组队并开始运行。")
+                .font(.system(size: 10))
+                .foregroundStyle(AppTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
     }
 
     private var followHealOptions: some View {

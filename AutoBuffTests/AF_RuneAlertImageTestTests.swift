@@ -113,6 +113,46 @@ struct RuneAlertImageTestTests {
         #expect(RuneAlertImageTestPolicy.stateHoldDuration < .seconds(12))
     }
 
+    // MARK: - 测谎图片回放
+
+    @Test func exposesRuneAndLieDetectionAsImageTestKinds() {
+        #expect(MonitorImageTestKind.allCases == [.rune, .mouseFollowVerification])
+        #expect(MonitorImageTestKind.rune.title == "符文")
+        #expect(MonitorImageTestKind.mouseFollowVerification.title == "测谎")
+    }
+
+    @Test func summarizesMouseFollowVerificationResultsAndPicksTheStrongest() throws {
+        let report = MouseFollowVerificationImageTestReport(items: [
+            verificationDetected("first.png", confidence: 0.68),
+            verificationDetected("best.png", confidence: 0.91),
+            MouseFollowVerificationImageTestItem(
+                fileName: "miss.png",
+                detection: nil,
+                isUnreadable: false
+            )
+        ])
+
+        #expect(report.summary.contains("3 张中 2 张识别到测谎弹窗"))
+        #expect(report.summary.contains("置信度 68%–91%"))
+        #expect(report.summary.contains("未识别：miss.png"))
+        #expect(try #require(report.strongest).fileName == "best.png")
+    }
+
+    @Test func mouseFollowVerificationRunnerReportsUnreadableImages() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VerificationImageTest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let broken = directory.appendingPathComponent("broken.jpeg")
+        try Data("not an image".utf8).write(to: broken)
+
+        let report = MouseFollowVerificationImageTestRunner.run(urls: [broken])
+
+        #expect(report.detectedItems.isEmpty)
+        #expect(report.unreadableItems.count == 1)
+        #expect(report.summary.contains("无法读取：broken.jpeg"))
+    }
+
     // MARK: - 辅助
 
     private func fixtureURLs() throws -> [URL] {
@@ -140,5 +180,25 @@ struct RuneAlertImageTestTests {
 
     private func missed(_ name: String) -> RuneAlertImageTestItem {
         RuneAlertImageTestItem(fileName: name, detection: nil, isUnreadable: false)
+    }
+
+    private func verificationDetected(
+        _ name: String,
+        confidence: Double
+    ) -> MouseFollowVerificationImageTestItem {
+        MouseFollowVerificationImageTestItem(
+            fileName: name,
+            detection: MouseFollowVerificationDetection(
+                rect: CGRect(x: 0, y: 0, width: 400, height: 280),
+                bodyRect: CGRect(x: 10, y: 40, width: 380, height: 200),
+                goldCoverage: 0.8,
+                titleBarDarkCoverage: 0.7,
+                instructionBarDarkCoverage: 0.7,
+                titleGlyphCoverage: 0.08,
+                brightTargetCoverage: 0.02,
+                confidence: confidence
+            ),
+            isUnreadable: false
+        )
     }
 }

@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AB0AAC000000000000000001 /* libonnxruntime.1.23.2.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = AB0AAC000000000000000003 /* libonnxruntime.1.23.2.dylib */; };
+		AB0AAC000000000000000002 /* libonnxruntime.1.23.2.dylib in Embed ONNX Runtime */ = {isa = PBXBuildFile; fileRef = AB0AAC000000000000000003 /* libonnxruntime.1.23.2.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		DD93C23C2FD445DF004F21CD /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -23,7 +28,22 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		AB0AAC000000000000000004 /* Embed ONNX Runtime */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				AB0AAC000000000000000002 /* libonnxruntime.1.23.2.dylib in Embed ONNX Runtime */,
+			);
+			name = "Embed ONNX Runtime";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		AB0AAC000000000000000003 /* libonnxruntime.1.23.2.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libonnxruntime.1.23.2.dylib; path = Vendor/ONNXRuntime/lib/libonnxruntime.1.23.2.dylib; sourceTree = SOURCE_ROOT; };
 		DD93C22A2FD445DE004F21CD /* AutoBuff.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AutoBuff.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD93C23B2FD445DF004F21CD /* AutoBuffTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutoBuffTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD93C2452FD445DF004F21CD /* AutoBuffUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AutoBuffUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -65,6 +85,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB0AAC000000000000000001 /* libonnxruntime.1.23.2.dylib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -91,6 +112,7 @@
 				DD93C22C2FD445DE004F21CD /* AutoBuff */,
 				DD93C23E2FD445DF004F21CD /* AutoBuffTests */,
 				DD93C2482FD445DF004F21CD /* AutoBuffUITests */,
+				AB0AAC000000000000000003 /* libonnxruntime.1.23.2.dylib */,
 				DD93C22B2FD445DE004F21CD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -114,6 +136,7 @@
 			buildPhases = (
 				DD93C2262FD445DE004F21CD /* Sources */,
 				DD93C2272FD445DE004F21CD /* Frameworks */,
+				AB0AAC000000000000000004 /* Embed ONNX Runtime */,
 				DD93C2282FD445DE004F21CD /* Resources */,
 			);
 			buildRules = (
@@ -409,22 +432,25 @@
 				CODE_SIGN_IDENTITY = "AutoBuff Local Development";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "\"AutoBuff/Preview Content\"";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ONNXRuntime/include";
 				INFOPLIST_FILE = AutoBuff/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/ONNXRuntime/lib";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = cc.juanwang.AutoBuff;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "AutoBuff/AutoBuff-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -438,22 +464,25 @@
 				CODE_SIGN_IDENTITY = "AutoBuff Local Development";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "\"AutoBuff/Preview Content\"";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ONNXRuntime/include";
 				INFOPLIST_FILE = AutoBuff/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/ONNXRuntime/lib";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = cc.juanwang.AutoBuff;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "AutoBuff/AutoBuff-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;

@@ -27,6 +27,7 @@ enum MonitorCoordinateReadout {
 struct MonitoringPanelView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var showsRuneTestImporter = false
+    @State private var imageTestKind: MonitorImageTestKind = .rune
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -45,7 +46,7 @@ struct MonitoringPanelView: View {
                 .disabled(viewModel.isRunning)
             }
 
-            remoteAccountSection
+            remoteMonitorActionsSection
 
             Picker("显示方式", selection: $viewModel.settings.monitorDisplayMode) {
                 ForEach(MonitorDisplayMode.allCases, id: \.self) { displayMode in
@@ -64,6 +65,8 @@ struct MonitoringPanelView: View {
             expReadout
 
             runeAlertReadout
+
+            mouseFollowVerificationReadout
 
             runeAlertImageTestRow
 
@@ -155,7 +158,16 @@ struct MonitoringPanelView: View {
     }
 
     private var expReadout: some View {
-        HStack(spacing: 12) {
+        let recognitionMethod = viewModel.monitorEXPReading?.recognitionMethod
+        let methodColor = switch recognitionMethod {
+        case .ppOCRv4:
+            AppTheme.success
+        case .fixedTemplate:
+            AppTheme.accent
+        case nil:
+            AppTheme.textSecondary
+        }
+        return HStack(spacing: 12) {
             Image(systemName: "chart.bar.fill")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(
@@ -165,9 +177,18 @@ struct MonitoringPanelView: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("经验识别")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(AppTheme.textSecondary)
+                HStack(spacing: 5) {
+                    Text("经验识别")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                    Text(recognitionMethod?.displayName ?? "未识别")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(methodColor)
+                        .lineLimit(1)
+                        .frame(width: 58)
+                        .padding(.vertical, 2)
+                        .background(methodColor.opacity(0.12), in: Capsule())
+                }
                 Text(viewModel.monitorEXPStatus)
                     .font(.system(size: 9))
                     .foregroundStyle(AppTheme.textSecondary)
@@ -176,31 +197,33 @@ struct MonitoringPanelView: View {
 
             Spacer()
 
-            if let reading = viewModel.monitorEXPReading {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text("当前 EXP")
-                            .font(.system(size: 9))
-                            .foregroundStyle(AppTheme.textSecondary)
-                        Text("\(reading.currentEXP)")
-                            .font(.system(size: 15, weight: .bold, design: .monospaced))
-                            .foregroundStyle(AppTheme.textPrimary)
-                    }
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text("已获得")
-                            .font(.system(size: 9))
-                            .foregroundStyle(AppTheme.textSecondary)
-                        Text("\(reading.percentText)%")
-                            .font(.system(size: 15, weight: .bold, design: .monospaced))
-                            .foregroundStyle(AppTheme.success)
-                    }
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("当前 EXP")
+                        .font(.system(size: 9))
+                        .foregroundStyle(AppTheme.textSecondary)
+                    Text(viewModel.monitorEXPReading.map { "\($0.currentEXP)" } ?? "--")
+                        .font(.system(size: 15, weight: .bold, design: .monospaced))
+                        .foregroundStyle(
+                            viewModel.monitorEXPReading == nil
+                                ? AppTheme.textSecondary
+                                : AppTheme.textPrimary
+                        )
                 }
-                .monospacedDigit()
-            } else {
-                Text("EXP --  (--%)")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(AppTheme.textSecondary)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("已获得")
+                        .font(.system(size: 9))
+                        .foregroundStyle(AppTheme.textSecondary)
+                    Text(viewModel.monitorEXPReading.map { "\($0.percentText)%" } ?? "--%")
+                        .font(.system(size: 15, weight: .bold, design: .monospaced))
+                        .foregroundStyle(
+                            viewModel.monitorEXPReading == nil
+                                ? AppTheme.textSecondary
+                                : AppTheme.success
+                        )
+                }
             }
+            .monospacedDigit()
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
@@ -261,6 +284,56 @@ struct MonitoringPanelView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("monitor.runeAlertReadout")
+    }
+
+    private var mouseFollowVerificationReadout: some View {
+        let isPresent = viewModel.monitorMouseFollowVerificationPresent
+        return HStack(spacing: 12) {
+            Image(systemName: isPresent ? "cursorarrow.motionlines.click" : "checkmark.shield")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isPresent ? AppTheme.danger : AppTheme.textSecondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("鼠标跟随验证")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+                Text(
+                    viewModel.isRunning
+                        ? (isPresent ? "验证弹窗已出现，请立即人工处理" : "未出现验证弹窗")
+                        : "尚未开始监控"
+                )
+                .font(.system(size: 9))
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineLimit(1)
+            }
+
+            Spacer()
+
+            if isPresent, let detection = viewModel.monitorMouseFollowVerificationDetection {
+                Text("置信度 \(Int((detection.confidence * 100).rounded()))%")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(AppTheme.danger)
+            } else {
+                Text(isPresent ? "紧急" : "正常")
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(isPresent ? AppTheme.danger : AppTheme.textSecondary)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .background(
+            (isPresent ? AppTheme.danger.opacity(0.14) : AppTheme.accentSoft.opacity(0.55)),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(
+                    isPresent ? AppTheme.danger.opacity(0.60) : AppTheme.border.opacity(0.7),
+                    lineWidth: 1
+                )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("monitor.mouseFollowVerificationReadout")
     }
 
     private var safeZoneReadout: some View {
@@ -366,10 +439,22 @@ struct MonitoringPanelView: View {
         .disabled(viewModel.settings.monitorSafeZone == nil)
     }
 
-    /// 用本地截图回放整条符文链路，方便在不等游戏真的出符文的情况下验证。
+    /// 用本地截图回放符文或测谎链路，方便在告警不易复现时验证。
     private var runeAlertImageTestRow: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
+                Picker("测试类型", selection: $imageTestKind) {
+                    ForEach(MonitorImageTestKind.allCases) { kind in
+                        Text(kind.title).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 112)
+                .onChange(of: imageTestKind) { _, _ in
+                    viewModel.monitorRuneTestSummary = ""
+                }
+
                 Button {
                     showsRuneTestImporter = true
                 } label: {
@@ -377,7 +462,7 @@ struct MonitoringPanelView: View {
                 }
                 .controlSize(.small)
                 .disabled(!viewModel.isRunning || viewModel.monitorRuneTestBusy)
-                .help("选择符文截图，走一遍识别、面板提示和推送")
+                .help("选择\(imageTestKind.imagePrompt)，走一遍识别、面板提示和推送")
 
                 Spacer(minLength: 0)
             }
@@ -399,12 +484,12 @@ struct MonitoringPanelView: View {
         ) { result in
             switch result {
             case .success(let urls):
-                viewModel.runRuneAlertImageTest(urls: urls)
+                viewModel.runMonitorImageTest(kind: imageTestKind, urls: urls)
             case .failure(let error):
-                viewModel.reportRuneAlertImageTestFailure(error)
+                viewModel.reportMonitorImageTestFailure(error)
             }
         }
-        .accessibilityIdentifier("monitor.runeAlertImageTest")
+        .accessibilityIdentifier("monitor.alertImageTest")
     }
 
     private var runeTestHintText: String {
@@ -412,63 +497,33 @@ struct MonitoringPanelView: View {
             return viewModel.monitorRuneTestSummary
         }
         return viewModel.isRunning
-            ? "选择符文截图，走一遍识别与推送"
+            ? "选择\(imageTestKind.imagePrompt)，走一遍识别与推送"
             : "开始监控后可用截图回放验证"
     }
 
-    private var remoteAccountSection: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                Label("远程预览", systemImage: "network")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Spacer()
+    private var remoteMonitorActionsSection: some View {
+        HStack(spacing: 8) {
+            Button {
+                viewModel.openRemoteMonitorPage()
+            } label: {
+                Label("打开监控网页", systemImage: "safari")
             }
+            .buttonStyle(.borderedProminent)
 
-            if viewModel.remoteMonitorAuthenticated {
-                HStack(spacing: 8) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .foregroundStyle(AppTheme.success)
-                    Text(viewModel.settings.monitorAccountUsername)
-                        .font(.system(size: 11, weight: .semibold))
-                    Spacer()
-                    Button("打开监控网页") {
-                        viewModel.openRemoteMonitorPage()
-                    }
-                    .controlSize(.small)
-                    Button("退出") {
-                        viewModel.logoutRemoteMonitor()
-                    }
-                    .controlSize(.small)
-                }
-                HStack(spacing: 6) {
-                    Image(systemName: "desktopcomputer")
-                        .foregroundStyle(AppTheme.accent)
-                    Text("本机名称：\(viewModel.remoteClientName)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .textSelection(.enabled)
-                    Spacer()
-                }
-            } else {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(viewModel.remoteMonitorAuthStatus)
-                        .font(.system(size: 11))
-                        .foregroundStyle(AppTheme.textSecondary)
-                }
+            Button {
+                viewModel.copyRemoteMonitorPageLink()
+            } label: {
+                Label(
+                    viewModel.remoteMonitorLinkCopied ? "已复制" : "复制链接",
+                    systemImage: viewModel.remoteMonitorLinkCopied ? "checkmark" : "doc.on.doc"
+                )
             }
+            .buttonStyle(.bordered)
 
+            Spacer()
         }
-        .padding(10)
-        .background(AppTheme.background.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(AppTheme.border)
-        }
-        .accessibilityIdentifier("monitor.remoteAccount")
+        .controlSize(.small)
+        .accessibilityIdentifier("monitor.remoteActions")
     }
 
     private var monitorCanvas: some View {

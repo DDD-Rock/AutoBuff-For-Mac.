@@ -84,7 +84,7 @@ struct MapTopologyLibraryView: View {
                         Text(status).font(.caption).foregroundStyle(AppTheme.textSecondary)
                         HStack(spacing: 8) {
                             Button(
-                                isCapturingCleanMap ? "正在合成纯净小地图" : "重新抓取纯净小地图",
+                                isCapturingCleanMap ? "正在识别小地图" : "重新识别小地图",
                                 systemImage: "arrow.triangle.2.circlepath"
                             ) {
                                 cleanCaptureRequestID = UUID()
@@ -126,7 +126,7 @@ struct MapTopologyLibraryView: View {
                         }
                         .disabled(maps.isEmpty)
                         if cloudAccess {
-                            Button("上传云端", systemImage: "icloud.and.arrow.up") {
+                            Button("批量上传", systemImage: "icloud.and.arrow.up") {
                                 uploadAllMaps()
                             }
                             .disabled(maps.isEmpty || cloudBusy)
@@ -139,23 +139,65 @@ struct MapTopologyLibraryView: View {
 
                     Divider()
 
-                    HStack(spacing: 12) {
-                        if maps.isEmpty {
-                            Text("还没有创建地图").foregroundStyle(AppTheme.textSecondary)
-                        } else {
-                            Picker("地图", selection: $selectedName) {
-                                ForEach(maps, id: \.mapName) { map in Text(map.mapName).tag(map.mapName) }
+                    if maps.isEmpty {
+                        Text("还没有创建地图").foregroundStyle(AppTheme.textSecondary)
+                    } else {
+                        HStack(alignment: .top, spacing: 14) {
+                            List(maps) { map in
+                                Button {
+                                    selectedName = map.mapName
+                                } label: {
+                                    HStack(spacing: 9) {
+                                        Image(systemName: "map")
+                                            .foregroundStyle(
+                                                selectedName == map.mapName
+                                                    ? AppTheme.accent
+                                                    : AppTheme.textSecondary
+                                            )
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(map.mapName)
+                                                .font(.system(size: 12, weight: .semibold))
+                                            Text("平台 \(map.platforms.count) · 绳索 \(map.ropes.count) · 传送点 \(map.portals.count)")
+                                                .font(.caption2)
+                                                .foregroundStyle(AppTheme.textSecondary)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.vertical, 4)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .listRowBackground(
+                                    selectedName == map.mapName
+                                        ? AppTheme.accentSoft
+                                        : Color.clear
+                                )
                             }
-                            .frame(maxWidth: 360)
-                            if let selected = maps.first(where: { $0.mapName == selectedName }) {
-                                Text("平台 \(selected.platforms.count) · 绳索 \(selected.ropes.count) · 传送点 \(selected.portals.count)")
-                                    .foregroundStyle(AppTheme.textSecondary)
+                            .listStyle(.inset)
+                            .frame(minWidth: 360, minHeight: 170, maxHeight: 230)
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                if let selected = maps.first(where: { $0.mapName == selectedName }) {
+                                    Text(selected.mapName)
+                                        .font(.headline)
+                                    Text("平台 \(selected.platforms.count)\n绳索 \(selected.ropes.count)\n传送点 \(selected.portals.count)")
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.textSecondary)
+                                    Button("修改所选地图", systemImage: "pencil") {
+                                        editingMap = selected
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    if cloudAccess {
+                                        Button("上传此地图", systemImage: "icloud.and.arrow.up") {
+                                            uploadMaps([selected])
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(cloudBusy)
+                                    }
+                                }
                             }
-                            Spacer()
-                            Button("修改", systemImage: "pencil") {
-                                editingMap = maps.first { $0.mapName == selectedName }
-                            }
-                            .buttonStyle(.borderedProminent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 8)
                         }
                     }
 
@@ -284,46 +326,18 @@ struct MapTopologyLibraryView: View {
             guard validation.isValid else {
                 status = "当前小地图纯内容区校验失败：\(validation.summary)"; return
             }
-            let sampleCount = 12
-            var frames = [firstFrame]
-            frames.reserveCapacity(sampleCount)
-            status = "正在采样纯净小地图 1/\(sampleCount)，请保持游戏窗口可见"
-
-            for sampleIndex in 1..<sampleCount {
-                try await Task.sleep(for: .milliseconds(160))
-                try Task.checkCancellation()
-                let frame = try await monitor.captureMinimap()
-                guard frame.width == firstFrame.width,
-                      frame.height == firstFrame.height else {
-                    throw MinimapBackgroundSynthesisError.inconsistentFrameSize
-                }
-                frames.append(frame)
-                status = "正在采样纯净小地图 \(sampleIndex + 1)/\(sampleCount)，正在过滤黄/橙/红点"
-            }
-
-            status = "正在合成无移动目标的小地图..."
-            let synthesis = try await Task.detached(priority: .userInitiated) {
-                try MinimapBackgroundSynthesizer.synthesize(frames: frames)
-            }.value
             try Task.checkCancellation()
             guard cleanCaptureRequestID == requestID else { return }
 
             currentRegion = region
-            currentBuffer = synthesis.buffer
-            currentSignature = MinimapVisualMatcher.signature(for: synthesis.buffer)
-            status = "纯净小地图已合成 \(synthesis.buffer.width)×\(synthesis.buffer.height)"
-                + " · 采样 \(synthesis.sampledFrameCount) 帧"
-                + " · 清理 \(synthesis.cleanedPixelCount) 像素"
-                + (
-                    synthesis.spatiallyRepairedPixelCount > 0
-                        ? " · 补齐 \(synthesis.spatiallyRepairedPixelCount) 像素"
-                        : ""
-                )
+            currentBuffer = firstFrame
+            currentSignature = MinimapVisualMatcher.signature(for: firstFrame)
+            status = "已识别当前小地图 \(firstFrame.width)×\(firstFrame.height)：\(validation.summary)"
         } catch is CancellationError {
             return
         } catch {
             guard cleanCaptureRequestID == requestID else { return }
-            status = "纯净小地图抓取失败：\(error.localizedDescription)"
+            status = "小地图识别失败：\(error.localizedDescription)"
         }
     }
 
@@ -360,12 +374,16 @@ struct MapTopologyLibraryView: View {
     }
 
     private func uploadAllMaps() {
-        guard cloudAccess, !cloudBusy, !maps.isEmpty else { return }
+        uploadMaps(maps)
+    }
+
+    private func uploadMaps(_ selectedMaps: [MapTopology]) {
+        guard cloudAccess, !cloudBusy, !selectedMaps.isEmpty else { return }
         cloudBusy = true
         Task {
             defer { cloudBusy = false }
             do {
-                let count = try await uploadCloudMaps(maps)
+                let count = try await uploadCloudMaps(selectedMaps)
                 transferStatus = "已上传 \(count) 张地图到云端"
             } catch {
                 showTransferError(title: "地图上传失败", error: error)

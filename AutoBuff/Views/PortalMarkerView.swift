@@ -7,9 +7,10 @@ struct PortalMarkerView: View {
     let existingX: Int?
     let existingY: Int?
     var title = "标记传送门位置"
+    var portalWidthThreshold: Binding<Double>? = nil
     var showAutoPortal = true
     var clearButtonTitle = "清除手动标记"
-    var loadedStatusText = "蓝点=自动检测，红点=手动标记，点击图像设置手动位置"
+    var loadedStatusText = "蓝色范围=自动检测，红色范围=手动标记；两侧边界距标记点等于导航阈值"
     let onConfirm: (Int?, Int?, CGRect?) -> Void
     
     @Environment(\.dismiss) private var dismiss
@@ -44,6 +45,18 @@ struct PortalMarkerView: View {
                     .frame(width: previewSize.width, height: previewSize.height)
                     .overlay {
                         Canvas { context, size in
+                            if showAutoPortal, let auto = autoPortal {
+                                if let range = portalRange(around: auto, in: size) {
+                                    context.fill(Path(range), with: .color(.blue.opacity(0.16)))
+                                    context.stroke(Path(range), with: .color(.blue.opacity(0.65)), lineWidth: 1)
+                                }
+                            }
+                            if let manual = manualPoint {
+                                if let range = portalRange(around: manual, in: size) {
+                                    context.fill(Path(range), with: .color(.red.opacity(0.16)))
+                                    context.stroke(Path(range), with: .color(.red.opacity(0.65)), lineWidth: 1)
+                                }
+                            }
                             if showAutoPortal, let auto = autoPortal {
                                 let p = scaled(auto, in: size)
                                 context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.blue))
@@ -140,6 +153,25 @@ struct PortalMarkerView: View {
                         .stroke(AppTheme.border)
                 }
             }
+            if let portalWidthThreshold {
+                HStack(spacing: 10) {
+                    Text("传送门宽度阈值")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    Spacer()
+                    Stepper(
+                        portalWidthThreshold.wrappedValue.formatted(.number.precision(.fractionLength(1))),
+                        value: portalWidthThreshold,
+                        in: 0.5...20,
+                        step: 0.5
+                    )
+                    .font(.system(size: 11))
+                    .fixedSize()
+                    .accessibilityIdentifier("portal.widthThreshold")
+                }
+                .padding(.horizontal, 8)
+                .frame(minHeight: 28)
+            }
             HStack {
                 Button(clearButtonTitle) { manualPoint = nil }
                 Spacer()
@@ -221,6 +253,18 @@ struct PortalMarkerView: View {
     private func scaled(_ point: CGPoint, in size: CGSize) -> CGPoint {
         guard regionSize.width > 0, regionSize.height > 0 else { return point }
         return CGPoint(x: point.x / regionSize.width * size.width, y: point.y / regionSize.height * size.height)
+    }
+
+    private func portalRange(around point: CGPoint, in size: CGSize) -> CGRect? {
+        guard let portalWidthThreshold,
+              regionSize.width > 0 else { return nil }
+        let threshold = CGFloat(portalWidthThreshold.wrappedValue)
+        guard threshold > 0 else { return nil }
+        let centerX = scaled(point, in: size).x
+        let halfWidth = threshold / regionSize.width * size.width
+        let minX = max(0, centerX - halfWidth)
+        let maxX = min(size.width, centerX + halfWidth)
+        return CGRect(x: minX, y: 0, width: max(0, maxX - minX), height: size.height)
     }
 
     private func imagePoint(from previewPoint: CGPoint) -> CGPoint {

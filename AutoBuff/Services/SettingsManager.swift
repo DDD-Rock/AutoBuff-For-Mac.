@@ -354,6 +354,8 @@ final class SettingsManager {
         var copy = settings
         copy.schemaVersion = AppSettings.currentSchemaVersion
         copy.returnToMarket = copy.mode == .deadFlower
+        copy.loungeMoveMinMinutes = max(1, min(24 * 60, copy.loungeMoveMinMinutes))
+        copy.loungeMoveMaxMinutes = max(1, min(24 * 60, copy.loungeMoveMaxMinutes))
         while copy.buffs.count > AppConstants.defaultBuffSlotCount,
               let last = copy.buffs.last,
               !last.enabled,

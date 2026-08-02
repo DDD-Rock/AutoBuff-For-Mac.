@@ -1,10 +1,37 @@
 import CoreGraphics
 import Foundation
 
+enum EXPRecognitionMethod: String, Equatable, Sendable {
+    case ppOCRv4
+    case fixedTemplate
+
+    var displayName: String {
+        switch self {
+        case .ppOCRv4:
+            return "PP-OCRv4"
+        case .fixedTemplate:
+            return "模板回退"
+        }
+    }
+}
+
 struct EXPRecognitionResult: Equatable, Sendable {
     let currentEXP: Int
     let percent: Double
     let confidence: Double
+    let recognitionMethod: EXPRecognitionMethod
+
+    init(
+        currentEXP: Int,
+        percent: Double,
+        confidence: Double,
+        recognitionMethod: EXPRecognitionMethod = .fixedTemplate
+    ) {
+        self.currentEXP = currentEXP
+        self.percent = percent
+        self.confidence = confidence
+        self.recognitionMethod = recognitionMethod
+    }
 
     var percentText: String {
         EXPValueFormatter.percent(percent)
@@ -15,7 +42,7 @@ struct EXPRecognitionResult: Equatable, Sendable {
     }
 
     var key: String {
-        "\(currentEXP)|\(percentText)"
+        "\(currentEXP)|\(percentText)|\(recognitionMethod.rawValue)"
     }
 }
 
@@ -136,6 +163,12 @@ enum EXPFixedFontRecognizer {
 
     /// Uses the stable EXP anchor only to crop the complete panel for OCR.
     static func locatePanel(in frame: ImageBuffer) -> ImageBuffer? {
+        locatePanelWithConfidence(in: frame)?.image
+    }
+
+    static func locatePanelWithConfidence(
+        in frame: ImageBuffer
+    ) -> (image: ImageBuffer, confidence: Double)? {
         guard let templates = EXPFixedFontTemplateLibrary.shared else {
             return nil
         }
@@ -160,12 +193,15 @@ enum EXPFixedFontRecognizer {
         let safeTop = max(0, top)
         let safeWidth = min(width - (safeLeft - left), frame.width - safeLeft)
         let safeHeight = min(height - (safeTop - top), frame.height - safeTop)
-        return frame.cropped(
+        guard let image = frame.cropped(
             x: safeLeft,
             y: safeTop,
             width: safeWidth,
             height: safeHeight
-        )
+        ) else {
+            return nil
+        }
+        return (image, anchor.confidence)
     }
 
     private static func recognizeCanonical(
@@ -541,22 +577,16 @@ enum EXPFixedFontRecognizer {
 /// Production EXP pipeline: template localization followed by whole-row OCR.
 enum EXPHybridRecognizer {
     static func recognize(in frame: ImageBuffer) -> EXPRecognitionResult? {
-        guard let panel = EXPFixedFontRecognizer.locatePanel(in: frame) else {
-            return nil
-        }
-        let attempt = EXPVisionRecognizer.recognize(in: panel)
-        guard let reading = attempt.reading else { return nil }
-        let isTrusted = reading.confidence >= 0.48
-            || (
-                reading.preprocessingAgreement
-                    && reading.confidence >= 0.25
+        if let located = EXPFixedFontRecognizer.locatePanelWithConfidence(in: frame),
+           let reading = EXPPaddleOCRRecognizer.recognize(in: located.image) {
+            return EXPRecognitionResult(
+                currentEXP: reading.currentEXP,
+                percent: reading.percent,
+                confidence: min(located.confidence, reading.confidence),
+                recognitionMethod: .ppOCRv4
             )
-        guard isTrusted else { return nil }
-        return EXPRecognitionResult(
-            currentEXP: reading.currentEXP,
-            percent: reading.percent,
-            confidence: Double(reading.confidence)
-        )
+        }
+        return EXPFixedFontRecognizer.recognize(in: frame)
     }
 }
 

@@ -504,7 +504,7 @@ enum PlatformTraceBuilder {
         }
         guard merged.count >= 3 else { return [] }
 
-        let runs = connectedRuns(from: merged)
+        let runs = connectedRuns(from: merged, canvasSize: canvasSize)
         guard var best = runs.max(by: { runScore($0) < runScore($1) }), best.count >= 3 else { return [] }
         best = medianSmooth(best)
         merged = simplify(best, tolerance: simplifyTolerance)
@@ -512,13 +512,18 @@ enum PlatformTraceBuilder {
         return merged.map { NormalizedMapPoint($0, in: canvasSize) }
     }
 
-    private static func connectedRuns(from points: [CGPoint]) -> [[CGPoint]] {
+    private static func connectedRuns(from points: [CGPoint], canvasSize: CGSize) -> [[CGPoint]] {
         guard let first = points.first else { return [] }
+        // macOS 每 120ms 采一次样本。正常移动或偶发漏检后，5px 很容易把同一平台
+        // 切断；按小地图尺寸放宽，同时设置上限，避免跨平台误连接。
+        let maximumHorizontalGap = max(10, min(18, canvasSize.width * 0.10))
+        let maximumVerticalGap = max(8, min(14, canvasSize.height * 0.12))
         var result: [[CGPoint]] = []
         var current = [first]
         for point in points.dropFirst() {
             guard let previous = current.last else { continue }
-            if point.x - previous.x <= 5, abs(point.y - previous.y) <= 6 {
+            if point.x - previous.x <= maximumHorizontalGap,
+               abs(point.y - previous.y) <= maximumVerticalGap {
                 current.append(point)
             } else {
                 result.append(current)

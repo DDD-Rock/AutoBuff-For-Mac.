@@ -7,6 +7,12 @@ struct MinimapBackgroundSynthesisResult: Equatable, Sendable {
     let spatiallyRepairedPixelCount: Int
 }
 
+struct MinimapReferenceMergeResult: Equatable, Sendable {
+    let buffer: ImageBuffer
+    let replacedPixelCount: Int
+    let stillCoveredPixelCount: Int
+}
+
 enum MinimapBackgroundSynthesisError: LocalizedError, Equatable {
     case notEnoughFrames
     case inconsistentFrameSize
@@ -50,7 +56,7 @@ enum MinimapBackgroundSynthesizer {
 
         let pixelCount = first.width * first.height
         let masks = frames.map {
-            dilatedMovingMarkerMask(in: $0, radius: 1)
+            movingMarkerMask(in: $0, radius: 1)
         }
         var output = [UInt8](repeating: 0, count: first.bgr.count)
         var unresolved = [Bool](repeating: false, count: pixelCount)
@@ -107,6 +113,47 @@ enum MinimapBackgroundSynthesizer {
         )
     }
 
+    /// Repairs only marker-covered pixels in the stored reference. Pixels that
+    /// are already clean are kept byte-for-byte, so repeated merges cannot blur
+    /// the reference image.
+    static func mergeReference(
+        stored: ImageBuffer,
+        current: ImageBuffer
+    ) throws -> MinimapReferenceMergeResult {
+        guard stored.width > 0,
+              stored.height > 0,
+              stored.width == current.width,
+              stored.height == current.height,
+              stored.bgr.count == stored.width * stored.height * 3,
+              current.bgr.count == stored.bgr.count else {
+            throw MinimapBackgroundSynthesisError.inconsistentFrameSize
+        }
+
+        let storedMask = movingMarkerMask(in: stored, radius: 1)
+        let currentMask = movingMarkerMask(in: current, radius: 1)
+        var output = stored.bgr
+        var replacedPixelCount = 0
+        var stillCoveredPixelCount = 0
+
+        for pixelIndex in storedMask.indices where storedMask[pixelIndex] {
+            guard !currentMask[pixelIndex] else {
+                stillCoveredPixelCount += 1
+                continue
+            }
+            let offset = pixelIndex * 3
+            output[offset] = current.bgr[offset]
+            output[offset + 1] = current.bgr[offset + 1]
+            output[offset + 2] = current.bgr[offset + 2]
+            replacedPixelCount += 1
+        }
+
+        return MinimapReferenceMergeResult(
+            buffer: ImageBuffer(width: stored.width, height: stored.height, bgr: output),
+            replacedPixelCount: replacedPixelCount,
+            stillCoveredPixelCount: stillCoveredPixelCount
+        )
+    }
+
     static func isMovingMarkerPixel(b: UInt8, g: UInt8, r: UInt8) -> Bool {
         let hsv = openCVHSV(r: r, g: g, b: b)
         let isWarmHue = hsv.h <= 45 || hsv.h >= 170
@@ -117,7 +164,7 @@ enum MinimapBackgroundSynthesizer {
             && Int(r) >= Int(b) + 20
     }
 
-    private static func dilatedMovingMarkerMask(
+    private static func movingMarkerMask(
         in image: ImageBuffer,
         radius: Int
     ) -> [Bool] {

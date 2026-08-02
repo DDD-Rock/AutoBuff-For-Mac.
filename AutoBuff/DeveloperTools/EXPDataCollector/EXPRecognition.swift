@@ -15,11 +15,15 @@ struct EXPParsedText: Equatable {
 enum EXPTextParser {
     private static let expressions = [
         try! NSRegularExpression(
-            pattern: #"(?:[EDFĐ]?XP|P)[\s\.:_-]*([0-9]{4,})\s*[\(\[\{]\s*([0-9]+(?:[\.,，][0-9]+)?)\s*%\s*[\)\]\}]?"#,
+            pattern: #"(?<![0-9,])(?:[A-Z\u00C0-\u024F]*XP[\s\.:_-]*)?([0-9][0-9,]*)\s*[\(\[\{]\s*([0-9]{1,3}(?:[\.,，][0-9]{1,4})?)\s*%"#,
             options: [.caseInsensitive]
         ),
         try! NSRegularExpression(
-            pattern: #"(?:[EDFĐ]?XP|P)[\s\.:_-]*([0-9]{4,}?)\s*[\(\[\{]?\s*((?:100[\.,，]0{1,4}|[0-9]{1,2}[\.,，][0-9]{1,4}))\s*%"#,
+            pattern: #"(?<![0-9,])(?:[A-Z\u00C0-\u024F]*XP[\s\.:_-]*)?([0-9][0-9,]*)\s+([0-9]{1,3}(?:[\.,，][0-9]{1,4})?)\s*%"#,
+            options: [.caseInsensitive]
+        ),
+        try! NSRegularExpression(
+            pattern: #"(?<![0-9,])(?:[A-Z\u00C0-\u024F]*XP[\s\.:_-]*)([0-9][0-9,]*?)\s*[\(\[\{]?\s*((?:100[\.,，]0{1,4}|[0-9]{1,2}[\.,，][0-9]{1,4}))\s*%"#,
             options: [.caseInsensitive]
         ),
     ]
@@ -32,7 +36,9 @@ enum EXPTextParser {
               let expRange = Range(match.range(at: 1), in: text),
               let percentRange = Range(match.range(at: 2), in: text),
               let matchRange = Range(match.range(at: 0), in: text),
-              let currentEXP = Int(text[expRange]),
+              let currentEXP = Int(
+                text[expRange].replacingOccurrences(of: ",", with: "")
+              ),
               let percent = Double(
                 text[percentRange]
                     .replacingOccurrences(of: "，", with: ".")

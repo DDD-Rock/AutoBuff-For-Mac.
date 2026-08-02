@@ -459,7 +459,7 @@ enum ColorDetector {
             near: preferredPoint
         ) {
             return PlayerMarkerDetectionResult(
-                point: best.centroid,
+                point: best.boundsCenter,
                 candidateCount: vividCandidates.count,
                 selectedArea: best.area,
                 selectedSize: CGSize(width: best.width, height: best.height)
@@ -490,7 +490,7 @@ enum ColorDetector {
         // character is moving.
         let best = bestPlayerMarker(in: candidates, near: preferredPoint)
         return PlayerMarkerDetectionResult(
-            point: best?.centroid,
+            point: best?.boundsCenter,
             candidateCount: candidates.count,
             selectedArea: best?.area,
             selectedSize: best.map { CGSize(width: $0.width, height: $0.height) }
@@ -1839,9 +1839,17 @@ enum ColorDetector {
     private struct ColorBlob {
         let centroid: CGPoint
         let minX: Int
+        let minY: Int
         let area: Int
         let width: Int
         let height: Int
+
+        var boundsCenter: CGPoint {
+            CGPoint(
+                x: CGFloat(minX) + CGFloat(width - 1) / 2,
+                y: CGFloat(minY) + CGFloat(height - 1) / 2
+            )
+        }
     }
 
     private static func playerMarkerScore(_ blob: ColorBlob) -> Double {
@@ -1859,8 +1867,8 @@ enum ColorDetector {
         let appearanceScore = playerMarkerScore(blob)
         guard let preferredPoint else { return appearanceScore }
         let distance = hypot(
-            blob.centroid.x - preferredPoint.x,
-            blob.centroid.y - preferredPoint.y
+            blob.boundsCenter.x - preferredPoint.x,
+            blob.boundsCenter.y - preferredPoint.y
         )
         return appearanceScore - min(distance, 200) * 0.18
     }
@@ -1905,6 +1913,7 @@ enum ColorDetector {
                 blobs.append(ColorBlob(
                     centroid: CGPoint(x: sumX / Double(area), y: sumY / Double(area)),
                     minX: minX,
+                    minY: minY,
                     area: area,
                     width: maxX - minX + 1,
                     height: maxY - minY + 1

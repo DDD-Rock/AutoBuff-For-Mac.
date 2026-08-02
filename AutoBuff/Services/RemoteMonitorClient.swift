@@ -112,6 +112,7 @@ private struct RemoteAuthRequest: Encodable {
 private struct RemoteUser: Codable {
     let id: Int64
     let username: String
+    let nickname: String?
     let isSuperAdmin: Bool?
 }
 
@@ -129,6 +130,16 @@ private struct RemoteClientBindResponse: Decodable {
     let id: String
     let clientId: String
     let name: String
+    let roleName: String?
+}
+
+private struct RemoteRoleNameRequest: Encodable {
+    let clientId: String
+    let roleName: String
+}
+
+private struct RemoteRoleNameResponse: Decodable {
+    let roleName: String
 }
 
 private struct RemoteAPIError: Decodable {
@@ -195,11 +206,18 @@ private struct RemoteEXPPayload: Encodable {
     let currentEXP: Int?
     let percent: Double?
     let confidence: Double?
+    let recognitionMethod: String?
     let status: String
     let recognizedAt: Int64
 }
 
 private struct RemoteRunePayload: Encodable {
+    let detected: Bool
+    let confidence: Double?
+    let detectedAt: Int64
+}
+
+private struct RemoteMouseFollowVerificationPayload: Encodable {
     let detected: Bool
     let confidence: Double?
     let detectedAt: Int64
@@ -223,15 +241,35 @@ private struct RemoteClientStatePayload: Encodable {
     let running: Bool
 }
 
+private struct RemoteTeamJoinedPayload: Encodable {
+    let teamId: Int64
+    let roleName: String
+}
+
+struct RemoteClientCommand {
+    let action: String
+    let reason: String?
+    let teamId: Int64?
+    let isLeader: Bool
+    let firstCreation: Bool
+    let roleName: String?
+    let inviteRoleNames: [String]
+}
+
 private struct RemoteServerMessage: Decodable {
     let type: String
     let clientId: String?
     let name: String?
+    let roleName: String?
     let action: String?
     let reason: String?
+    let teamId: Int64?
+    let isLeader: Bool?
+    let firstCreation: Bool?
+    let inviteRoleNames: [String]?
 }
 
-/// 布尔型监控状态（符文提示、安全区越界）的上报节奏。
+/// 布尔型监控状态（鼠标跟随验证、符文提示、安全区越界）的上报节奏。
 ///
 /// 状态一变化就立刻发送，让服务器第一时间知道；状态没变化时按心跳间隔
 /// 重发，服务器据此判断数据是否新鲜，客户端掉线后不会被当成状态仍然成立。
@@ -250,13 +288,18 @@ enum MonitorStatePublishPolicy {
 
 @MainActor
 final class RemoteMonitorClient {
+    private static let clientVersion = Bundle.main.object(
+        forInfoDictionaryKey: "CFBundleShortVersionString"
+    ) as? String ?? "0.0.0"
     private(set) var accessToken: String?
     private(set) var username: String?
+    private(set) var nickname: String?
     private(set) var clientID: String?
     private(set) var clientName: String?
     private(set) var isSuperAdmin = false
     var onIdentity: ((String) -> Void)?
-    var onCommand: ((String, String?) -> Void)?
+    var onRoleName: ((String) -> Void)?
+    var onCommand: ((RemoteClientCommand) -> Void)?
     private var baseURL = ""
     private var socket: URLSessionWebSocketTask?
     private var publisherURL: URL?
@@ -271,8 +314,11 @@ final class RemoteMonitorClient {
     private var pendingFrameMessage: Data?
     private var pendingEXPMessage: Data?
     private var pendingRuneMessage: Data?
+    private var pendingMouseFollowVerificationMessage: Data?
     private var lastRuneState: Bool?
     private var lastRuneSentAt = ContinuousClock.now
+    private var lastMouseFollowVerificationState: Bool?
+    private var lastMouseFollowVerificationSentAt = ContinuousClock.now
     private var pendingZoneMessage: Data?
     private var lastZoneState: Bool?
     private var lastZoneSentAt = ContinuousClock.now
@@ -295,6 +341,7 @@ final class RemoteMonitorClient {
         )
         accessToken = response.accessToken
         self.username = response.user.username
+        self.nickname = response.user.nickname ?? "未设置昵称"
         isSuperAdmin = response.user.isSuperAdmin ?? false
         do {
             try await prepareLocalIdentity()
@@ -307,6 +354,7 @@ final class RemoteMonitorClient {
             RemoteMonitorLocalStore.shared.deleteAccessToken()
             accessToken = nil
             self.username = nil
+            self.nickname = nil
             isSuperAdmin = false
             throw error
         }
@@ -323,6 +371,7 @@ final class RemoteMonitorClient {
                 authenticated: true
             )
             username = user.username
+            nickname = user.nickname ?? "未设置昵称"
             isSuperAdmin = user.isSuperAdmin ?? false
             try await prepareLocalIdentity()
             try await validateCurrentClient()
@@ -360,6 +409,7 @@ final class RemoteMonitorClient {
     private func startPublisherSocket(url: URL, accessToken: String) {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        applyClientVersionHeaders(to: &request)
         let task = URLSession.shared.webSocketTask(with: request)
         socket = task
         resetSendQueue()
@@ -389,6 +439,25 @@ final class RemoteMonitorClient {
             type: "client_state",
             payload: RemoteClientStatePayload(mode: mode, running: running)
         )
+    }
+
+    func publishTeamJoined(teamID: Int64, roleName: String) {
+        guard socket != nil else { return }
+        send(
+            type: "team_joined",
+            payload: RemoteTeamJoinedPayload(teamId: teamID, roleName: roleName)
+        )
+    }
+
+    func saveRoleName(_ roleName: String) async throws -> String {
+        guard let clientID else { throw RemoteMonitorError.invalidResponse }
+        let response: RemoteRoleNameResponse = try await request(
+            path: "/api/clients/role-name",
+            method: "PUT",
+            body: RemoteRoleNameRequest(clientId: clientID, roleName: roleName),
+            authenticated: true
+        )
+        return response.roleName
     }
 
     func publish(frame: MonitoringFrame) {
@@ -441,6 +510,7 @@ final class RemoteMonitorClient {
                 currentEXP: reading?.currentEXP,
                 percent: reading?.percent,
                 confidence: reading?.confidence,
+                recognitionMethod: reading?.recognitionMethod.rawValue,
                 status: status,
                 recognizedAt: Int64(Date().timeIntervalSince1970 * 1000)
             )
@@ -461,6 +531,30 @@ final class RemoteMonitorClient {
         send(
             type: "rune",
             payload: RemoteRunePayload(
+                detected: isPresent,
+                confidence: isPresent ? detection?.confidence : nil,
+                detectedAt: Int64(Date().timeIntervalSince1970 * 1000)
+            )
+        )
+    }
+
+    func publishMouseFollowVerification(
+        isPresent: Bool,
+        detection: MouseFollowVerificationDetection?
+    ) {
+        guard socket != nil else { return }
+        guard MonitorStatePublishPolicy.shouldSend(
+            isActive: isPresent,
+            lastSentState: lastMouseFollowVerificationState,
+            sinceLastSend: lastMouseFollowVerificationSentAt.duration(to: .now)
+        ) else {
+            return
+        }
+        lastMouseFollowVerificationState = isPresent
+        lastMouseFollowVerificationSentAt = .now
+        send(
+            type: "verification",
+            payload: RemoteMouseFollowVerificationPayload(
                 detected: isPresent,
                 confidence: isPresent ? detection?.confidence : nil,
                 detectedAt: Int64(Date().timeIntervalSince1970 * 1000)
@@ -518,6 +612,7 @@ final class RemoteMonitorClient {
         RemoteMonitorLocalStore.shared.deleteAccessToken()
         accessToken = nil
         username = nil
+        nickname = nil
         isSuperAdmin = false
     }
 
@@ -572,6 +667,7 @@ final class RemoteMonitorClient {
         )
         clientName = response.name
         onIdentity?(response.name)
+        if let roleName = response.roleName, !roleName.isEmpty { onRoleName?(roleName) }
         try await Task.detached(priority: .utility) {
             try RemoteMonitorLocalStore.shared.saveClientName(response.name)
         }.value
@@ -609,6 +705,11 @@ final class RemoteMonitorClient {
                 apiError?.message ?? "客户端授权检查失败（\(httpResponse.statusCode)）"
             )
         }
+        if let authorization = try? JSONDecoder().decode(RemoteClientBindResponse.self, from: data) {
+            clientName = authorization.name
+            onIdentity?(authorization.name)
+            if let roleName = authorization.roleName, !roleName.isEmpty { onRoleName?(roleName) }
+        }
     }
 
     private func handleServerMessage(_ message: URLSessionWebSocketTask.Message) {
@@ -635,7 +736,17 @@ final class RemoteMonitorClient {
                 try? RemoteMonitorLocalStore.shared.saveClientName(name)
             }
         } else if decoded.type == "command", let action = decoded.action {
-            onCommand?(action, decoded.reason)
+            onCommand?(
+                RemoteClientCommand(
+                    action: action,
+                    reason: decoded.reason,
+                    teamId: decoded.teamId,
+                    isLeader: decoded.isLeader ?? false,
+                    firstCreation: decoded.firstCreation ?? false,
+                    roleName: decoded.roleName,
+                    inviteRoleNames: decoded.inviteRoleNames ?? []
+                )
+            )
         }
     }
 
@@ -660,7 +771,17 @@ final class RemoteMonitorClient {
                 guard !Task.isCancelled, publisherEnabled else { return }
                 startPublisherSocket(url: publisherURL, accessToken: accessToken)
             } catch RemoteMonitorError.clientUnbound(let message) {
-                onCommand?("unbind", message)
+                onCommand?(
+                    RemoteClientCommand(
+                        action: "unbind",
+                        reason: message,
+                        teamId: nil,
+                        isLeader: false,
+                        firstCreation: false,
+                        roleName: nil,
+                        inviteRoleNames: []
+                    )
+                )
             } catch {
                 schedulePublisherReconnect()
             }
@@ -681,6 +802,8 @@ final class RemoteMonitorClient {
                 pendingEXPMessage = data
             case "rune":
                 pendingRuneMessage = data
+            case "verification":
+                pendingMouseFollowVerificationMessage = data
             case "zone":
                 pendingZoneMessage = data
             default:
@@ -702,6 +825,10 @@ final class RemoteMonitorClient {
         let message: Data
         if !pendingControlMessages.isEmpty {
             message = pendingControlMessages.removeFirst()
+        } else if let pendingMouseFollowVerificationMessage {
+            // 鼠标跟随验证需要人工立即介入，优先级高于其他状态。
+            message = pendingMouseFollowVerificationMessage
+            self.pendingMouseFollowVerificationMessage = nil
         } else if let pendingRuneMessage {
             // 告警类消息最紧急，排在 EXP 和位置帧之前。
             message = pendingRuneMessage
@@ -739,9 +866,11 @@ final class RemoteMonitorClient {
         pendingFrameMessage = nil
         pendingEXPMessage = nil
         pendingRuneMessage = nil
+        pendingMouseFollowVerificationMessage = nil
         pendingZoneMessage = nil
         // 重连后必须重新上报一次告警状态，不能沿用断线前的判断。
         lastRuneState = nil
+        lastMouseFollowVerificationState = nil
         lastZoneState = nil
     }
 
@@ -757,6 +886,7 @@ final class RemoteMonitorClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        applyClientVersionHeaders(to: &request)
         if let body {
             request.httpBody = try JSONEncoder().encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -778,5 +908,10 @@ final class RemoteMonitorClient {
         } catch {
             throw RemoteMonitorError.invalidResponse
         }
+    }
+
+    private func applyClientVersionHeaders(to request: inout URLRequest) {
+        request.setValue("macos", forHTTPHeaderField: "X-AutoBuff-Client-Platform")
+        request.setValue(Self.clientVersion, forHTTPHeaderField: "X-AutoBuff-Client-Version")
     }
 }

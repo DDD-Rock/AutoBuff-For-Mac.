@@ -66,7 +66,15 @@ struct ContentView: View {
                 PortalMarkerView(
                     windowID: window.windowID,
                     existingX: viewModel.settings.manualPortalX,
-                    existingY: viewModel.settings.manualPortalY
+                    existingY: viewModel.settings.manualPortalY,
+                    title: "标记自由市场传送门",
+                    portalWidthThreshold: Binding(
+                        get: { viewModel.settings.portalWidthThreshold },
+                        set: { value in
+                            viewModel.settings.portalWidthThreshold = value
+                            viewModel.saveSettings()
+                        }
+                    )
                 ) { x, y, _ in
                     viewModel.settings.manualPortalX = x
                     viewModel.settings.manualPortalY = y
@@ -167,10 +175,22 @@ struct ContentView: View {
             sidebarStatus
                 .padding(.horizontal, 8)
 
+            Divider()
+                .overlay(AppTheme.border)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+
+            sidebarAccount
+                .padding(.horizontal, 8)
+
             Spacer(minLength: 12)
 
             sidebarFooter
                 .padding(6)
+
+            sidebarVersionBadge
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
         }
         .frame(width: MainWindowLayout.sidebarWidth)
         .background(AppTheme.panel.opacity(0.82))
@@ -222,12 +242,6 @@ struct ContentView: View {
                 Text(modeDescription)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(AppTheme.textSecondary)
-                if viewModel.remoteMonitorAuthenticated {
-                    Label(viewModel.remoteClientName, systemImage: "desktopcomputer")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(AppTheme.accent)
-                        .lineLimit(1)
-                }
             }
 
             Spacer(minLength: 16)
@@ -337,21 +351,31 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [AppTheme.accent, Color(red: 0.27, green: 0.62, blue: 1)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+        HStack(spacing: 9) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [AppTheme.accent, Color(red: 0.27, green: 0.62, blue: 1)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
-                )
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white)
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 38, height: 38)
+            .shadow(color: AppTheme.accent.opacity(0.25), radius: 10, y: 5)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("AutoBuff")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                Text("自动辅助")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
         }
-        .frame(width: 38, height: 38)
-        .shadow(color: AppTheme.accent.opacity(0.25), radius: 10, y: 5)
         .help("Auto Buff · v\(AppConstants.appVersion)")
         .accessibilityLabel("Auto Buff")
         .accessibilityIdentifier("app.title")
@@ -393,17 +417,24 @@ struct ContentView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .frame(width: 38, height: 32)
-                Circle()
-                    .fill(granted ? AppTheme.success : AppTheme.warning)
-                    .frame(width: 7, height: 7)
-                    .overlay { Circle().stroke(AppTheme.panel, lineWidth: 2) }
-                    .offset(x: -4, y: -3)
+            HStack(spacing: 7) {
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: icon)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .frame(width: 24, height: 28)
+                    Circle()
+                        .fill(granted ? AppTheme.success : AppTheme.warning)
+                        .frame(width: 7, height: 7)
+                        .overlay { Circle().stroke(AppTheme.panel, lineWidth: 2) }
+                        .offset(x: -1, y: -2)
+                }
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
         .help("\(title)：\(granted ? "已就绪" : "需设置")")
@@ -452,9 +483,15 @@ struct ContentView: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.system(size: 19))
+                    .font(.system(size: 17))
                     .foregroundStyle(selected ? AppTheme.accent : AppTheme.textSecondary)
+                    .frame(width: 22)
+                Text(mode.title)
+                    .font(.system(size: 11, weight: selected ? .bold : .medium))
+                    .foregroundStyle(selected ? AppTheme.accent : AppTheme.textPrimary)
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 9)
             .frame(maxWidth: .infinity, minHeight: 42)
             .background(selected ? AppTheme.accentSoft : AppTheme.panel)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -470,32 +507,15 @@ struct ContentView: View {
     }
 
     private var sidebarFooter: some View {
-        VStack(alignment: .center, spacing: 9) {
+        VStack(alignment: .leading, spacing: 7) {
             Button {
                 viewModel.requestMapTopologyEditor()
             } label: {
-                Image(systemName: "map")
-                    .frame(width: 40, height: 28)
+                Label("地图库", systemImage: "map")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(viewModel.isRunning)
             .help("地图")
-
-            if viewModel.mode == .deadFlower
-                || (viewModel.mode == .temple && viewModel.settings.templeFunction == .freeEntry) {
-                Button {
-                    Task { await viewModel.requestPortalMarker() }
-                } label: {
-                    if viewModel.isCheckingPortalMarker {
-                        ProgressView().controlSize(.mini)
-                            .frame(width: 40, height: 28)
-                    } else {
-                        Image(systemName: "mappin.and.ellipse")
-                            .frame(width: 40, height: 28)
-                    }
-                }
-                .disabled(viewModel.isRunning || viewModel.isCheckingPortalMarker)
-                .help("传送门")
-            }
 
             if !viewModel.screenRecordingGranted
                 || (viewModel.mode != .monitor && !viewModel.accessibilityGranted) {
@@ -506,8 +526,8 @@ struct ContentView: View {
                         viewModel.repairAccessibility()
                     }
                 } label: {
-                    Image(systemName: "wrench.and.screwdriver")
-                        .frame(width: 40, height: 28)
+                    Label("修复权限", systemImage: "wrench.and.screwdriver")
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .help("修复系统权限")
             }
@@ -515,6 +535,66 @@ struct ContentView: View {
         .font(.system(size: 10, weight: .medium))
         .buttonStyle(.borderless)
         .foregroundStyle(AppTheme.accent)
+    }
+
+    private var sidebarVersionBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "shippingbox.fill")
+                .font(.system(size: 10, weight: .bold))
+            Text("版本 v\(AppConstants.appVersion)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .lineLimit(1)
+        }
+        .foregroundStyle(AppTheme.accent)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .background(AppTheme.accentSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(AppTheme.accent.opacity(0.28))
+        }
+        .help("当前客户端版本 v\(AppConstants.appVersion)")
+        .accessibilityLabel("当前客户端版本 \(AppConstants.appVersion)")
+        .accessibilityIdentifier("sidebar.appVersion")
+    }
+
+    private var sidebarAccount: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("软件账号", systemImage: "person.crop.circle.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(AppTheme.textPrimary)
+
+            if viewModel.remoteMonitorAuthenticated {
+                Text(
+                    viewModel.settings.monitorAccountNickname.isEmpty
+                        ? "未设置昵称"
+                        : viewModel.settings.monitorAccountNickname
+                )
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AppTheme.accent)
+                .lineLimit(1)
+
+                Label(viewModel.remoteClientName, systemImage: "desktopcomputer")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+                    .help(viewModel.remoteClientName)
+
+                Button("退出账号") {
+                    viewModel.logoutRemoteMonitor()
+                }
+                .font(.system(size: 9, weight: .medium))
+                .buttonStyle(.link)
+            } else {
+                Text(viewModel.remoteMonitorAuthStatus)
+                    .font(.system(size: 9))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("sidebar.remoteAccount")
     }
 
     private var modeDescription: String {

@@ -41,6 +41,7 @@ struct MapTopologyEditorView: View {
     @State private var contentRegion: CGRect?
     @State private var statusText = "正在识别小地图内容区..."
     @State private var isLoading = true
+    @State private var isMergingReference = false
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
     @State private var history: [MapTopology] = []
@@ -176,7 +177,15 @@ struct MapTopologyEditorView: View {
                     reloadMinimap()
                 }
                 .buttonStyle(.bordered)
-                .disabled(isLoading || isTracing || isExecutingAction)
+                .disabled(isLoading || isMergingReference || isTracing || isExecutingAction)
+                Button(
+                    isMergingReference ? "正在融合" : "抓取当前小地图并融合",
+                    systemImage: "square.stack.3d.up"
+                ) {
+                    mergeCurrentMinimapIntoReference()
+                }
+                .buttonStyle(.bordered)
+                .disabled(isLoading || isMergingReference || isTracing || isExecutingAction)
                 Text(topology.mapName)
                     .font(.headline)
                     .foregroundStyle(AppTheme.textSecondary)
@@ -1454,7 +1463,7 @@ struct MapTopologyEditorView: View {
     }
 
     private func reloadMinimap() {
-        guard !isLoading, !isTracing, !isExecutingAction else { return }
+        guard !isLoading, !isMergingReference, !isTracing, !isExecutingAction else { return }
         liveRefreshTask?.cancel()
         liveRefreshTask = nil
         liveSimilarity = nil
@@ -1469,18 +1478,85 @@ struct MapTopologyEditorView: View {
         }
     }
 
-    private func storedReferenceSignature() -> [UInt8]? {
+    private func mergeCurrentMinimapIntoReference() {
+        guard !isLoading, !isMergingReference, !isTracing, !isExecutingAction else { return }
+        guard let stored = storedReferenceBuffer() else {
+            statusText = "这张地图没有可融合的已保存参考图"
+            return
+        }
+        isMergingReference = true
+        statusText = "正在抓取当前小地图并检查是否匹配..."
+
+        Task { @MainActor in
+            defer { isMergingReference = false }
+            let monitor = MinimapMonitor()
+            monitor.setWindow(windowID)
+            do {
+                guard let region = try await monitor.autoDetectDarkRegion() else {
+                    statusText = "无法识别当前小地图：\(monitor.lastDetectionSummary)"
+                    return
+                }
+                let current = try await monitor.captureMinimap()
+                let validation = ColorDetector.validateMinimapContent(in: current)
+                guard validation.isValid else {
+                    statusText = "当前小地图校验失败：\(validation.summary)"
+                    return
+                }
+                guard current.width == stored.width, current.height == stored.height else {
+                    statusText = "当前小地图尺寸为 \(current.width)×\(current.height)，与已保存的 \(stored.width)×\(stored.height) 不一致，未融合"
+                    return
+                }
+
+                let currentSignature = MinimapVisualMatcher.signature(for: current)
+                let referenceSignature = topology.visualSignature
+                    ?? MinimapVisualMatcher.signature(for: stored)
+                let comparison = MinimapVisualMatcher.comparison(currentSignature, referenceSignature)
+                guard comparison.isMatch else {
+                    statusText = "当前小地图与“\(topology.mapName)”仅相似 \(String(format: "%.1f", comparison.similarityPercentage))%，为避免串图未融合"
+                    return
+                }
+
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try MinimapBackgroundSynthesizer.mergeReference(
+                        stored: stored,
+                        current: current
+                    )
+                }.value
+                pushHistory()
+                topology.referenceWidth = result.buffer.width
+                topology.referenceHeight = result.buffer.height
+                topology.referenceBGR = Data(result.buffer.bgr)
+                topology.visualSignature = MinimapVisualMatcher.signature(for: result.buffer)
+                minimapBuffer = result.buffer
+                minimapImage = result.buffer.mapEditorImage()
+                contentSize = CGSize(width: result.buffer.width, height: result.buffer.height)
+                contentRegion = region
+                onConfirm(topology)
+                statusText = result.replacedPixelCount > 0
+                    ? "融合并保存完成：用当前未遮挡区域修补了 \(result.replacedPixelCount) 个像素；仍有 \(result.stillCoveredPixelCount) 个像素被标记遮挡"
+                    : "已检查并保存：当前截图没有可用于修补的新增未遮挡区域"
+            } catch {
+                statusText = "小地图融合失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func storedReferenceBuffer() -> ImageBuffer? {
         guard let data = topology.referenceBGR,
               topology.referenceWidth > 0,
               topology.referenceHeight > 0,
               data.count == topology.referenceWidth * topology.referenceHeight * 3 else {
             return nil
         }
-        let buffer = ImageBuffer(
+        return ImageBuffer(
             width: topology.referenceWidth,
             height: topology.referenceHeight,
             bgr: Array(data)
         )
+    }
+
+    private func storedReferenceSignature() -> [UInt8]? {
+        guard let buffer = storedReferenceBuffer() else { return nil }
         return MinimapVisualMatcher.signature(for: buffer)
     }
 }

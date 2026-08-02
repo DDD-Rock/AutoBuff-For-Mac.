@@ -27,6 +27,16 @@ struct MonitorFrameSchedulerTests {
         #expect(MonitorFrameScheduler.shouldRefreshMapMatch(frameIndex: 12))
     }
 
+    @Test func checksMouseFollowVerificationOnEveryWindowFrame() {
+        for frameIndex in 0..<20 {
+            #expect(
+                MonitorFrameScheduler.shouldDetectMouseFollowVerification(
+                    windowFrameIndex: frameIndex
+                )
+            )
+        }
+    }
+
     @Test func latestFrameStreamDropsBufferedOldFrames() async throws {
         let first = ImageBuffer(width: 1, height: 1, bgr: [1, 1, 1])
         let second = ImageBuffer(width: 1, height: 1, bgr: [2, 2, 2])
