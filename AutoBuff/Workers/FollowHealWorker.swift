@@ -3,7 +3,7 @@ import Foundation
 
 enum FollowHealNavigation {
     static let playerMarkerMinArea = 5
-    static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 7...10
+    static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 4...7
     static let newCollisionDistance: CGFloat = 1
 
     struct TeleportExcursionGuard {
