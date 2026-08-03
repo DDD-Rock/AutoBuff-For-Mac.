@@ -177,6 +177,7 @@ final class MonitoringSession {
         var verificationStabilizer = MouseFollowVerificationStabilizer()
         var consecutiveCaptureFailures = 0
         var windowFrameIndex = 0
+        let expRecognizer = EXPProductionRecognizer()
 
         while currentRunID == runID && !Task.isCancelled {
             do {
@@ -191,7 +192,7 @@ final class MonitoringSession {
                         shouldDetectVerification
                             ? MouseFollowVerificationDetector.detect(in: captured.buffer)
                             : nil,
-                        EXPHybridRecognizer.recognize(in: captured.buffer),
+                        expRecognizer.recognize(in: captured.buffer),
                         shouldDetectRune
                             ? RuneAlertDetector.detect(in: captured.buffer)
                             : nil

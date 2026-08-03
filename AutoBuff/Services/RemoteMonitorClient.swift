@@ -490,7 +490,7 @@ final class RemoteMonitorClient {
             }
         }
 
-        guard lastFrameSentAt.duration(to: .now) >= .milliseconds(100) else { return }
+        guard lastFrameSentAt.duration(to: .now) >= .milliseconds(50) else { return }
         lastFrameSentAt = .now
         let payload = RemoteFramePayload(
             player: frame.playerPoint.map { NormalizedMapPoint($0, in: contentSize) },
@@ -836,12 +836,12 @@ final class RemoteMonitorClient {
         } else if let pendingZoneMessage {
             message = pendingZoneMessage
             self.pendingZoneMessage = nil
-        } else if let pendingEXPMessage {
-            message = pendingEXPMessage
-            self.pendingEXPMessage = nil
         } else if let pendingFrameMessage {
             message = pendingFrameMessage
             self.pendingFrameMessage = nil
+        } else if let pendingEXPMessage {
+            message = pendingEXPMessage
+            self.pendingEXPMessage = nil
         } else {
             return
         }

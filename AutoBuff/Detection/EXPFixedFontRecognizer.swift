@@ -169,39 +169,7 @@ enum EXPFixedFontRecognizer {
     static func locatePanelWithConfidence(
         in frame: ImageBuffer
     ) -> (image: ImageBuffer, confidence: Double)? {
-        guard let templates = EXPFixedFontTemplateLibrary.shared else {
-            return nil
-        }
-        let anchor = EXPPanelLocator.locateNearbyAnchor(
-            in: frame,
-            template: templates.anchorImage
-        ) ?? EXPPanelLocator.locateFallbackAnchor(
-            in: frame,
-            template: templates.anchorImage
-        )
-        guard let anchor else { return nil }
-
-        let left = Int(
-            (Double(anchor.x) - 8 * anchor.scale).rounded()
-        )
-        let top = Int(
-            (Double(anchor.y) - 3 * anchor.scale).rounded()
-        )
-        let width = max(1, Int((185 * anchor.scale).rounded()))
-        let height = max(1, Int((44 * anchor.scale).rounded()))
-        let safeLeft = max(0, left)
-        let safeTop = max(0, top)
-        let safeWidth = min(width - (safeLeft - left), frame.width - safeLeft)
-        let safeHeight = min(height - (safeTop - top), frame.height - safeTop)
-        guard let image = frame.cropped(
-            x: safeLeft,
-            y: safeTop,
-            width: safeWidth,
-            height: safeHeight
-        ) else {
-            return nil
-        }
-        return (image, anchor.confidence)
+        EXPPanelLocationCache().locatePanelWithConfidence(in: frame)
     }
 
     private static func recognizeCanonical(
@@ -574,19 +542,224 @@ enum EXPFixedFontRecognizer {
     }
 }
 
-/// Production EXP pipeline: template localization followed by whole-row OCR.
-enum EXPHybridRecognizer {
-    static func recognize(in frame: ImageBuffer) -> EXPRecognitionResult? {
-        if let located = EXPFixedFontRecognizer.locatePanelWithConfidence(in: frame),
-           let reading = EXPPaddleOCRRecognizer.recognize(in: located.image) {
-            return EXPRecognitionResult(
-                currentEXP: reading.currentEXP,
-                percent: reading.percent,
-                confidence: min(located.confidence, reading.confidence),
-                recognitionMethod: .ppOCRv4
+/// Stateful panel locator used by the live OCR pipeline.
+///
+/// It caches only the stable `EXP` anchor and the largest verified panel width.
+/// The text rectangle itself is never reused: `%]` is searched in the original
+/// full-window frame every time so a longer EXP value cannot be clipped.
+final class EXPPanelLocationCache: @unchecked Sendable {
+    private struct Entry {
+        let frameWidth: Int
+        let frameHeight: Int
+        let anchor: EXPAnchorMatch
+        var maximumPanelWidth: Int
+    }
+
+    private var entry: Entry?
+    private(set) var fullSearchCount = 0
+
+    func reset() {
+        entry = nil
+    }
+
+    func locatePanelWithConfidence(
+        in frame: ImageBuffer
+    ) -> (image: ImageBuffer, confidence: Double)? {
+        guard let templates = EXPFixedFontTemplateLibrary.shared else {
+            return nil
+        }
+
+        if let entry,
+           entry.frameWidth != frame.width || entry.frameHeight != frame.height {
+            reset()
+        }
+
+        let cachedAnchor = entry.flatMap {
+            EXPPanelLocator.locateCachedAnchor(
+                in: frame,
+                template: templates.anchorImage,
+                previous: $0.anchor
             )
         }
-        return EXPFixedFontRecognizer.recognize(in: frame)
+        let anchor: EXPAnchorMatch?
+        if let cachedAnchor {
+            anchor = cachedAnchor
+        } else {
+            fullSearchCount += 1
+            anchor = EXPPanelLocator.locateNearbyAnchor(
+                in: frame,
+                template: templates.anchorImage
+            ) ?? EXPPanelLocator.locateFallbackAnchor(
+                in: frame,
+                template: templates.anchorImage
+            )
+        }
+        guard let anchor else {
+            reset()
+            return nil
+        }
+
+        let left = Int((Double(anchor.x) - 8 * anchor.scale).rounded())
+        let top = Int((Double(anchor.y) - 3 * anchor.scale).rounded())
+        let canonicalWidth = max(
+            1,
+            Int((Double(EXPFixedFontRecognizer.canonicalWidth) * anchor.scale).rounded())
+        )
+        let previousMaximum = entry?.maximumPanelWidth ?? canonicalWidth
+        let detectedRight = EXPPanelLineEndDetector.locateRightEdge(
+            in: frame,
+            anchor: anchor,
+            percentTemplate: templates.percentImage,
+            rightBracketTemplate: templates.rightParenthesisImage
+        )
+        let detectedWidth = detectedRight.map {
+            max(canonicalWidth, $0 - left + max(4, Int((8 * anchor.scale).rounded())))
+        } ?? max(
+            canonicalWidth,
+            Int((EXPPanelLineEndDetector.maximumCanonicalSearchWidth * anchor.scale).rounded())
+        )
+        let maximumPanelWidth = max(previousMaximum, detectedWidth)
+        let height = max(
+            1,
+            Int((Double(EXPFixedFontRecognizer.canonicalHeight) * anchor.scale).rounded())
+        )
+
+        let safeLeft = max(0, left)
+        let safeTop = max(0, top)
+        let safeWidth = min(
+            maximumPanelWidth - (safeLeft - left),
+            frame.width - safeLeft
+        )
+        let safeHeight = min(
+            height - (safeTop - top),
+            frame.height - safeTop
+        )
+        guard safeWidth > 0, safeHeight > 0,
+              let image = frame.cropped(
+                x: safeLeft,
+                y: safeTop,
+                width: safeWidth,
+                height: safeHeight
+              ) else {
+            reset()
+            return nil
+        }
+
+        entry = Entry(
+            frameWidth: frame.width,
+            frameHeight: frame.height,
+            anchor: anchor,
+            maximumPanelWidth: maximumPanelWidth
+        )
+        return (image, anchor.confidence)
+    }
+}
+
+private enum EXPPanelLineEndDetector {
+    /// Maximum search width is deliberately wider than the old 185 px crop so
+    /// `2,121,276,324[100.00%]` can extend beyond the canonical test fixture.
+    static let maximumCanonicalSearchWidth = 260.0
+
+    static func locateRightEdge(
+        in frame: ImageBuffer,
+        anchor: EXPAnchorMatch,
+        percentTemplate: ImageBuffer,
+        rightBracketTemplate: ImageBuffer
+    ) -> Int? {
+        let percent = EXPLuminanceTemplate(image: percentTemplate, scale: anchor.scale)
+        let rightBracket = EXPLuminanceTemplate(
+            image: rightBracketTemplate,
+            scale: anchor.scale
+        )
+        let panelLeft = Int((Double(anchor.x) - 8 * anchor.scale).rounded())
+        let minimumX = max(
+            0,
+            anchor.x + Int((55 * anchor.scale).rounded())
+        )
+        let maximumX = min(
+            frame.width - rightBracket.width,
+            panelLeft + Int((maximumCanonicalSearchWidth * anchor.scale).rounded())
+        )
+        guard minimumX <= maximumX else { return nil }
+
+        let yRadius = max(2, Int((3 * anchor.scale).rounded()))
+        let minimumY = max(0, anchor.y - yRadius)
+        let maximumY = min(frame.height - rightBracket.height, anchor.y + yRadius)
+        guard minimumY <= maximumY else { return nil }
+
+        let percentOffset = Int((16 * anchor.scale).rounded())
+        let searchLeft = max(0, minimumX - percentOffset - 4)
+        let searchTop = minimumY
+        let searchRight = min(frame.width, maximumX + rightBracket.width)
+        let searchBottom = min(frame.height, maximumY + rightBracket.height)
+        guard let search = frame.cropped(
+            x: searchLeft,
+            y: searchTop,
+            width: searchRight - searchLeft,
+            height: searchBottom - searchTop
+        ) else {
+            return nil
+        }
+        let pixels = EXPLuminanceImage(image: search)
+        var best: (rightEdge: Int, score: Double)?
+        for y in minimumY...maximumY {
+            for x in minimumX...maximumX {
+                let bracketScore = pixels.score(
+                    template: rightBracket,
+                    x: x - searchLeft,
+                    y: y - searchTop
+                )
+                guard bracketScore >= 0.45 else { continue }
+                let percentScore = pixels.bestScore(
+                    template: percent,
+                    x: x - percentOffset - searchLeft,
+                    y: anchor.y - searchTop
+                )
+                guard percentScore >= 0.45 else { continue }
+                let score = min(bracketScore, percentScore)
+                if best == nil || score > best!.score {
+                    best = (x + rightBracket.width, score)
+                }
+            }
+        }
+        return best?.rightEdge
+    }
+}
+
+/// Production EXP pipeline: cached template localization followed by PP-OCRv4.
+final class EXPProductionRecognizer: @unchecked Sendable {
+    typealias PanelRecognizer = @Sendable (ImageBuffer) -> EXPPaddleOCRReading?
+
+    private let panelLocator = EXPPanelLocationCache()
+    private let recognizePanel: PanelRecognizer
+
+    init(
+        recognizePanel: @escaping PanelRecognizer = {
+            EXPPaddleOCRRecognizer.recognize(in: $0)
+        }
+    ) {
+        self.recognizePanel = recognizePanel
+    }
+
+    func recognize(in frame: ImageBuffer) -> EXPRecognitionResult? {
+        guard let located = panelLocator.locatePanelWithConfidence(in: frame),
+              let reading = recognizePanel(located.image) else {
+            return nil
+        }
+        return EXPRecognitionResult(
+            currentEXP: reading.currentEXP,
+            percent: reading.percent,
+            confidence: min(located.confidence, reading.confidence),
+            recognitionMethod: .ppOCRv4
+        )
+    }
+}
+
+/// Stateless compatibility entry point used by image replay tests and developer tools.
+/// The live monitor owns one `EXPProductionRecognizer` so its panel cache persists.
+enum EXPHybridRecognizer {
+    static func recognize(in frame: ImageBuffer) -> EXPRecognitionResult? {
+        EXPProductionRecognizer().recognize(in: frame)
     }
 }
 
@@ -792,7 +965,7 @@ private struct EXPLuminanceImage {
         return best
     }
 
-    private func score(
+    func score(
         template: EXPLuminanceTemplate,
         x: Int,
         y: Int
@@ -824,6 +997,45 @@ private struct EXPLuminanceImage {
 }
 
 private enum EXPPanelLocator {
+    static func locateCachedAnchor(
+        in frame: ImageBuffer,
+        template: ImageBuffer,
+        previous: EXPAnchorMatch
+    ) -> EXPAnchorMatch? {
+        let radius = max(4, Int((8 * previous.scale).rounded()))
+        let scaledWidth = max(1, Int((Double(template.width) * previous.scale).rounded()))
+        let scaledHeight = max(1, Int((Double(template.height) * previous.scale).rounded()))
+        let left = max(0, previous.x - radius)
+        let top = max(0, previous.y - radius)
+        let width = min(
+            frame.width - left,
+            scaledWidth + radius * 2
+        )
+        let height = min(
+            frame.height - top,
+            scaledHeight + radius * 2
+        )
+        guard let search = frame.cropped(
+            x: left,
+            y: top,
+            width: width,
+            height: height
+        ), let match = TemplateMatcher.match(
+            image: search,
+            template: template,
+            threshold: 0.55,
+            scales: [previous.scale]
+        ) else {
+            return nil
+        }
+        return EXPAnchorMatch(
+            x: left + match.x,
+            y: top + match.y,
+            scale: match.scaleX,
+            confidence: match.confidence
+        )
+    }
+
     static func locateNearbyAnchor(
         in frame: ImageBuffer,
         template: ImageBuffer

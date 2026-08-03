@@ -188,6 +188,79 @@ struct EXPFixedFontRecognizerTests {
         #expect(abs(located.height - panel.height) <= 2)
     }
 
+    @Test func cachedAnchorIsReusedUntilWindowSizeChanges() throws {
+        let panel = try makePanel(currentEXP: "6528", percentage: "0.01")
+        let cache = EXPPanelLocationCache()
+        var first = ImageBuffer(
+            width: 900,
+            height: 500,
+            bgr: [UInt8](repeating: 18, count: 900 * 500 * 3)
+        )
+        paste(panel, into: &first, x: 358, y: 440)
+
+        _ = try #require(cache.locatePanelWithConfidence(in: first))
+        #expect(cache.fullSearchCount == 1)
+        _ = try #require(cache.locatePanelWithConfidence(in: first))
+        #expect(cache.fullSearchCount == 1)
+
+        var resized = ImageBuffer(
+            width: 1_000,
+            height: 600,
+            bgr: [UInt8](repeating: 18, count: 1_000 * 600 * 3)
+        )
+        paste(panel, into: &resized, x: 408, y: 540)
+        _ = try #require(cache.locatePanelWithConfidence(in: resized))
+        #expect(cache.fullSearchCount == 2)
+    }
+
+    @Test func lineEndExpandsCropBeyondCanonicalWidth() throws {
+        let rightBracketX = 205
+        let panel = try makeLineEndPanel(width: 230, rightBracketX: rightBracketX)
+        var frame = ImageBuffer(
+            width: 900,
+            height: 500,
+            bgr: [UInt8](repeating: 18, count: 900 * 500 * 3)
+        )
+        paste(panel, into: &frame, x: 335, y: 440)
+
+        let located = try #require(
+            EXPPanelLocationCache().locatePanelWithConfidence(in: frame)
+        )
+
+        #expect(located.image.width > EXPFixedFontRecognizer.canonicalWidth)
+        #expect(located.image.width >= rightBracketX + 3 + 8)
+    }
+
+    @Test func missingLineEndUsesConservativeMaximumWidth() throws {
+        var frame = ImageBuffer(
+            width: 900,
+            height: 500,
+            bgr: [UInt8](repeating: 18, count: 900 * 500 * 3)
+        )
+        let anchor = try #require(TemplatePaths.load(TemplatePaths.expAnchor))
+        paste(anchor, into: &frame, x: 358, y: 443)
+
+        let located = try #require(
+            EXPPanelLocationCache().locatePanelWithConfidence(in: frame)
+        )
+
+        #expect(located.image.width >= 260)
+    }
+
+    @Test func productionRecognizerDoesNotFallBackToFixedTemplates() throws {
+        let panel = try makePanel(currentEXP: "6528", percentage: "0.01")
+        var frame = ImageBuffer(
+            width: 900,
+            height: 500,
+            bgr: [UInt8](repeating: 18, count: 900 * 500 * 3)
+        )
+        paste(panel, into: &frame, x: 358, y: 440)
+        let recognizer = EXPProductionRecognizer { _ in nil }
+
+        #expect(EXPFixedFontRecognizer.recognize(in: frame) != nil)
+        #expect(recognizer.recognize(in: frame) == nil)
+    }
+
     @Test func replaysLocalCollectedSamplesWhenAvailable() throws {
         let root = EXPDatasetStore.defaultDirectoryURL
         let manifest = root.appendingPathComponent("manifest.jsonl")
@@ -292,6 +365,38 @@ struct EXPFixedFontRecognizerTests {
             y: 3
         )
 
+        for y in 19...31 {
+            drawBrightRun(in: &panel, x: 8, y: y, width: 155)
+        }
+        drawBrightRun(in: &panel, x: 8, y: 38, width: 155)
+        return panel
+    }
+
+    private func makeLineEndPanel(
+        width: Int,
+        rightBracketX: Int
+    ) throws -> ImageBuffer {
+        var panel = ImageBuffer(
+            width: width,
+            height: EXPFixedFontRecognizer.canonicalHeight,
+            bgr: [UInt8](
+                repeating: 12,
+                count: width * EXPFixedFontRecognizer.canonicalHeight * 3
+            )
+        )
+        try pasteTemplate(TemplatePaths.expAnchor, into: &panel, x: 8, y: 3)
+        try pasteTemplate(
+            TemplatePaths.expPercent,
+            into: &panel,
+            x: rightBracketX - 16,
+            y: 3
+        )
+        try pasteTemplate(
+            TemplatePaths.expRightParenthesis,
+            into: &panel,
+            x: rightBracketX,
+            y: 3
+        )
         for y in 19...31 {
             drawBrightRun(in: &panel, x: 8, y: y, width: 155)
         }
