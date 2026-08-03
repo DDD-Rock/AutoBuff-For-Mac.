@@ -65,13 +65,37 @@ private final class EXPPaddleOCRRuntime: @unchecked Sendable {
 
     func recognize(in panel: ImageBuffer) -> EXPPaddleOCRReading? {
         guard !panel.isEmpty,
-              let enlarged = EXPOCRImageScaler.nearestNeighbor(panel, scale: 4),
-              let textLine = detectTextLine(in: enlarged),
-              let decoded = recognizeText(in: textLine.image),
-              decoded.confidence >= 0.80,
-              let parsed = EXPTextParser.parse(decoded.text) else {
+              let enlarged = EXPOCRImageScaler.nearestNeighbor(panel, scale: 4) else {
             return nil
         }
+
+        // The fixed EXP anchor has already localized a single canonical panel.
+        // Its upper 48% is always the text row; sending that row straight to
+        // PP-OCRv4 recognition avoids a ~736×3100 DB-detector inference on every
+        // frame. Keep DB detection as a compatibility fallback for unusual UI
+        // scaling or panel layouts.
+        let directLineHeight = max(1, Int((Double(enlarged.height) * 0.48).rounded(.up)))
+        let directLine = enlarged.cropped(
+            x: 0,
+            y: 0,
+            width: enlarged.width,
+            height: directLineHeight
+        )
+        if let directLine,
+           let decoded = recognizeText(in: directLine),
+           decoded.confidence >= 0.80,
+           let parsed = EXPTextParser.parse(decoded.text) {
+            return EXPPaddleOCRReading(
+                currentEXP: parsed.currentEXP,
+                percent: parsed.percent,
+                confidence: decoded.confidence,
+                rawText: decoded.text
+            )
+        }
+        guard let textLine = detectTextLine(in: enlarged),
+              let decoded = recognizeText(in: textLine.image),
+              decoded.confidence >= 0.80,
+              let parsed = EXPTextParser.parse(decoded.text) else { return nil }
         return EXPPaddleOCRReading(
             currentEXP: parsed.currentEXP,
             percent: parsed.percent,
@@ -85,7 +109,14 @@ private final class EXPPaddleOCRRuntime: @unchecked Sendable {
     ) -> (image: ImageBuffer, confidence: Double)? {
         let minimumSide = min(image.width, image.height)
         guard minimumSide > 0 else { return nil }
-        let ratio = minimumSide < 736 ? 736.0 / Double(minimumSide) : 1
+        // RapidOCR's 736px default targets full screenshots. This input is
+        // already a 4× enlarged, anchor-cropped 185×44 panel, so a 160px
+        // minimum side preserves ~48px glyphs while cutting detector pixels
+        // by roughly 16× at native scale.
+        let detectorMinimumSide = 160.0
+        let ratio = minimumSide < Int(detectorMinimumSide)
+            ? detectorMinimumSide / Double(minimumSide)
+            : 1
         let targetWidth = max(32, Int((Double(image.width) * ratio / 32).rounded()) * 32)
         let targetHeight = max(32, Int((Double(image.height) * ratio / 32).rounded()) * 32)
         let input = EXPOCRImageScaler.normalizedPlanarBGR(

@@ -139,16 +139,15 @@ struct EXPFixedFontRecognizerTests {
         #expect(stabilizer.update(nil) == nil)
     }
 
-    @Test func productionStabilizerRequiresThreeMatchingOCRFrames() {
+    @Test func productionStabilizerPublishesAfterTwoMatchingOCRFrames() {
         let reading = EXPRecognitionResult(
             currentEXP: 6_528,
             percent: 0.01,
             confidence: 0.98,
             recognitionMethod: .ppOCRv4
         )
-        var stabilizer = EXPRecognitionStabilizer()
+        var stabilizer = EXPRecognitionStabilizer(requiredMatches: 2)
 
-        #expect(stabilizer.update(reading) == nil)
         #expect(stabilizer.update(reading) == nil)
         #expect(stabilizer.update(reading) == reading)
     }
@@ -300,10 +299,15 @@ struct EXPFixedFontRecognizerTests {
         }
 
         let reading = try #require(
-            EXPFixedFontRecognizer.recognize(in: screenshot)
+            environment["EXP_TEST_HYBRID"] == "1"
+                ? EXPHybridRecognizer.recognize(in: screenshot)
+                : EXPFixedFontRecognizer.recognize(in: screenshot)
         )
         #expect(reading.currentEXP == expectedEXP)
         #expect(reading.percent == expectedPercent)
+        if let expectedMethod = environment["EXP_TEST_METHOD"] {
+            #expect(reading.recognitionMethod.rawValue == expectedMethod)
+        }
     }
 
     private func makePanel(currentEXP: String, percentage: String) throws -> ImageBuffer {

@@ -172,7 +172,8 @@ final class MonitoringSession {
     /// 整窗识别任务：每 500ms 抓一帧完整游戏窗口，EXP 与鼠标跟随验证每帧识别，
     /// 符文提示每两帧识别一次（约每秒一次）。所有任务共用同一帧，不额外截图。
     private func runWindowRecognition(windowID: CGWindowID, runID currentRunID: UUID) async {
-        var stabilizer = EXPRecognitionStabilizer()
+        // 两帧一致即可发布：在 500ms 固定周期下，数值变化约 0.5～1 秒可见。
+        var stabilizer = EXPRecognitionStabilizer(requiredMatches: 2, toleratedMisses: 3)
         var runeStabilizer = RuneAlertStabilizer()
         var verificationStabilizer = MouseFollowVerificationStabilizer()
         var consecutiveCaptureFailures = 0
@@ -180,6 +181,7 @@ final class MonitoringSession {
         let expRecognizer = EXPProductionRecognizer()
 
         while currentRunID == runID && !Task.isCancelled {
+            let cycleStartedAt = ContinuousClock.now
             do {
                 let captured = try await expCaptureService.captureBGR(windowID: windowID)
                 let shouldDetectRune = MonitorFrameScheduler.shouldDetectRuneAlert(
@@ -235,7 +237,11 @@ final class MonitoringSession {
                 }
                 expCaptureService.clearCaptureCache()
             }
-            try? await Task.sleep(for: MonitorFrameScheduler.windowFrameInterval)
+            let elapsed = cycleStartedAt.duration(to: .now)
+            let remaining = MonitorFrameScheduler.windowFrameInterval - elapsed
+            if remaining > .zero {
+                try? await Task.sleep(for: remaining)
+            }
         }
     }
 
