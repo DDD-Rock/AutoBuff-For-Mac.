@@ -866,6 +866,32 @@ struct SettingsManagerTests {
         }
     }
 
+    @Test func followHealCollisionDoesNotResetScheduledAdjustment() {
+        let deadline = FollowHealNavigation.updatedCenterAdjustDeadline(
+            currentDeadline: 105,
+            now: 102,
+            scheduledTriggered: false
+        )
+
+        #expect(deadline == 105)
+    }
+
+    @Test func followHealScheduledAdjustmentAdvancesItsOwnDeadline() {
+        let deadline = FollowHealNavigation.updatedCenterAdjustDeadline(
+            currentDeadline: 100,
+            now: 102,
+            scheduledTriggered: true
+        )
+
+        #expect(deadline >= 106)
+        #expect(deadline <= 109)
+    }
+
+    @Test func followHealHoldAndGapRangesMatchPolicy() {
+        #expect(FollowHealNavigation.healHoldRange == 8...12)
+        #expect(FollowHealNavigation.healGapRange == 0.25...0.60)
+    }
+
     @Test func followHealNewExcursionCorrectsImmediately() {
         var guardState = FollowHealNavigation.TeleportExcursionGuard()
         let shouldCorrect = guardState.shouldCorrect(currentX: 108, baseX: 100, tolerance: 6)

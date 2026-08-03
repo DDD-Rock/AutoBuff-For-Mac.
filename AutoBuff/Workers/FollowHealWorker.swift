@@ -4,6 +4,8 @@ import Foundation
 enum FollowHealNavigation {
     static let playerMarkerMinArea = 5
     static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 4...7
+    static let healHoldRange: ClosedRange<TimeInterval> = 8...12
+    static let healGapRange: ClosedRange<TimeInterval> = 0.25...0.60
     static let newCollisionDistance: CGFloat = 1
 
     struct TeleportExcursionGuard {
@@ -95,6 +97,15 @@ enum FollowHealNavigation {
 
     static func nextCenterAdjustInterval() -> TimeInterval {
         Double.random(in: centerAdjustIntervalRange)
+    }
+
+    static func updatedCenterAdjustDeadline(
+        currentDeadline: TimeInterval,
+        now: TimeInterval,
+        scheduledTriggered: Bool
+    ) -> TimeInterval {
+        guard scheduledTriggered else { return currentDeadline }
+        return now + nextCenterAdjustInterval()
     }
 }
 
@@ -277,7 +288,8 @@ final class FollowHealWorker: ObservableObject {
             onError?("加血键错误: \(error.localizedDescription)")
             return
         }
-        let endAt = Date().timeIntervalSince1970 + Double.random(in: 10...15)
+        let endAt = Date().timeIntervalSince1970
+            + Double.random(in: FollowHealNavigation.healHoldRange)
         var missingPlayerCount = 0
         while isRunning && !Task.isCancelled && Date().timeIntervalSince1970 < endAt {
             if !buffsToCast(buffs: buffs, nextCast: nextCast, includeUpcoming: false).isEmpty {
@@ -320,8 +332,11 @@ final class FollowHealWorker: ObservableObject {
                             excursionGuard.recordTeleport(direction: direction)
                         }
                     }
-                    nextCenterAdjustAt = Date().timeIntervalSince1970
-                        + FollowHealNavigation.nextCenterAdjustInterval()
+                    nextCenterAdjustAt = FollowHealNavigation.updatedCenterAdjustDeadline(
+                        currentDeadline: nextCenterAdjustAt,
+                        now: now,
+                        scheduledTriggered: isScheduledAdjustment
+                    )
                 }
             } else if minimap.minimapSize != nil {
                 missingPlayerCount += 1
@@ -333,7 +348,7 @@ final class FollowHealWorker: ObservableObject {
         }
         await human.releaseKey(healKeyCode)
         if isRunning && !Task.isCancelled {
-            await randomSleep(0.18...0.45)
+            await randomSleep(FollowHealNavigation.healGapRange)
         }
     }
 
