@@ -861,8 +861,8 @@ struct SettingsManagerTests {
     @Test func followHealCenterAdjustIntervalIsFrequent() {
         for _ in 0..<20 {
             let interval = FollowHealNavigation.nextCenterAdjustInterval()
-            #expect(interval >= 10)
-            #expect(interval <= 13)
+            #expect(interval >= 7)
+            #expect(interval <= 10)
         }
     }
 
