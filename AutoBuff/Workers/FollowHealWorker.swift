@@ -2,24 +2,95 @@ import CoreGraphics
 import Foundation
 
 enum FollowHealNavigation {
-    static let arrivalTolerance: CGFloat = 3.0
-    static let movementObservedTolerance: CGFloat = 1.0
-    static let anchorBandTolerance: CGFloat = 6.0
     static let playerMarkerMinArea = 5
-    static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 12...15
+    static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 10...13
+    static let newCollisionDistance: CGFloat = 1
 
-    static func directionToBase(currentX: CGFloat, baseX: CGFloat) -> HumanInput.Direction? {
-        let delta = currentX - baseX
-        if abs(delta) <= arrivalTolerance { return nil }
-        return delta > 0 ? .left : .right
+    struct TeleportExcursionGuard {
+        private(set) var lastTeleportDirection: HumanInput.Direction?
+        private(set) var awaitingStablePosition = false
+        private(set) var guardedReverseDirection: HumanInput.Direction?
+        private(set) var guardedDistance: CGFloat?
+
+        mutating func recordTeleport(direction: HumanInput.Direction) {
+            lastTeleportDirection = direction
+            awaitingStablePosition = true
+            guardedReverseDirection = nil
+            guardedDistance = nil
+        }
+
+        mutating func shouldCorrect(
+            currentX: CGFloat,
+            baseX: CGFloat,
+            tolerance: CGFloat
+        ) -> Bool {
+            guard FollowHealNavigation.isOutsideAnchorBand(
+                currentX: currentX,
+                baseX: baseX,
+                tolerance: tolerance
+            ) else {
+                clearGuard()
+                return false
+            }
+
+            let direction = FollowHealNavigation.teleportDirectionToBase(
+                currentX: currentX,
+                baseX: baseX
+            )
+            let distance = abs(currentX - baseX)
+
+            if awaitingStablePosition {
+                awaitingStablePosition = false
+                // Still outside on the original side: the marker has settled,
+                // so another teleport toward the anchor is allowed.
+                if direction == lastTeleportDirection {
+                    guardedReverseDirection = nil
+                    guardedDistance = nil
+                    return true
+                }
+
+                // Crossing the anchor is the result of this teleport, not a
+                // new collision. Do not immediately teleport back.
+                guardedReverseDirection = direction
+                guardedDistance = distance
+                return false
+            }
+
+            if direction == guardedReverseDirection {
+                let baseline = guardedDistance ?? distance
+                if distance >= baseline + FollowHealNavigation.newCollisionDistance {
+                    guardedReverseDirection = nil
+                    guardedDistance = nil
+                    return true
+                }
+                guardedDistance = min(baseline, distance)
+                return false
+            }
+
+            guardedReverseDirection = nil
+            guardedDistance = nil
+            return true
+        }
+
+        private mutating func clearGuard() {
+            awaitingStablePosition = false
+            guardedReverseDirection = nil
+            guardedDistance = nil
+        }
     }
 
-    static func isOutsideAnchorBand(currentX: CGFloat, baseX: CGFloat) -> Bool {
-        abs(currentX - baseX) > anchorBandTolerance
+    static func teleportDirectionToBase(currentX: CGFloat, baseX: CGFloat) -> HumanInput.Direction? {
+        if currentX < baseX { return .right }
+        if currentX > baseX { return .left }
+        return nil
     }
 
-    static func directionForCenterAdjustment(currentX: CGFloat, baseX: CGFloat) -> HumanInput.Direction {
-        directionToBase(currentX: currentX, baseX: baseX) ?? .right
+    static func isOutsideAnchorBand(
+        currentX: CGFloat,
+        baseX: CGFloat,
+        tolerance: CGFloat
+    ) -> Bool {
+        abs(currentX - baseX) > tolerance
     }
 
     static func nextCenterAdjustInterval() -> TimeInterval {
@@ -81,6 +152,11 @@ final class FollowHealWorker: ObservableObject {
             await finish(runID: currentRunID)
             return
         }
+        guard !settings.teleportSkillKey.isEmpty else {
+            onError?("请先设置瞬移技能键")
+            await finish(runID: currentRunID)
+            return
+        }
         guard let healAnchorX = settings.healAnchorX else {
             onError?("请先标记跟补基准点")
             await finish(runID: currentRunID)
@@ -98,7 +174,8 @@ final class FollowHealWorker: ObservableObject {
         }
 
         let baseX = CGFloat(healAnchorX)
-        log("使用手动跟补基准点 X=\(format(baseX))")
+        let boundaryTolerance = CGFloat(settings.followHealBoundaryTolerance)
+        log("使用手动跟补基准点 X=\(format(baseX))，左右界限 ±\(format(boundaryTolerance))")
         if let savedRegion = settings.healMinimapRegion {
             minimap.clearMinimapRegion()
             minimap.setMinimapRegion(savedRegion)
@@ -118,9 +195,8 @@ final class FollowHealWorker: ObservableObject {
         }
 
         var nextCast: [Int: TimeInterval] = [:]
-        var lastKnownX = baseX
         var nextCenterAdjustAt = Date().timeIntervalSince1970 + FollowHealNavigation.nextCenterAdjustInterval()
-        var missingPlayerCount = 0
+        var excursionGuard = FollowHealNavigation.TeleportExcursionGuard()
 
         while isRunning && !Task.isCancelled {
             guard windowSelector.isWindowValid(windowID: windowID) else {
@@ -139,15 +215,20 @@ final class FollowHealWorker: ObservableObject {
             if !due.isEmpty {
                 due = buffsToCast(buffs: buffs, nextCast: nextCast, includeUpcoming: true)
                 _ = await castAllReady(buffs: due, nextCast: &nextCast, windowID: windowID)
-                await randomSleep(0.8...1.2)
+                await randomSleep(0.18...0.42)
                 continue
             }
 
             if minimap.minimapSize == nil {
-                await performHealCycle(
+                await performContinuousHealCycle(
                     healKey: settings.healSkillKey,
+                    teleportKey: settings.teleportSkillKey,
+                    baseX: baseX,
+                    boundaryTolerance: boundaryTolerance,
                     buffs: buffs,
                     nextCast: &nextCast,
+                    nextCenterAdjustAt: &nextCenterAdjustAt,
+                    excursionGuard: &excursionGuard,
                     windowID: windowID
                 )
                 if let rect = try? await minimap.autoDetectDarkRegion() {
@@ -158,57 +239,15 @@ final class FollowHealWorker: ObservableObject {
                 continue
             }
 
-            if let player = try? await minimap.findPlayerPosition(
-                minArea: FollowHealNavigation.playerMarkerMinArea
-            ) {
-                missingPlayerCount = 0
-                logPlayerCoordinateIfDue(
-                    player,
-                    baseX: baseX,
-                    phase: "常规检测"
-                )
-                if abs(player.x - lastKnownX) > FollowHealNavigation.movementObservedTolerance {
-                    lastKnownX = player.x
-                }
-
-                if FollowHealNavigation.isOutsideAnchorBand(currentX: player.x, baseX: baseX) {
-                    log("检测到离开基准区域：当前X=\(format(player.x))，基准X=\(format(baseX))")
-                    let canContinue = await returnToBase(
-                        baseX: baseX,
-                        startX: player.x,
-                        buffs: buffs,
-                        nextCast: &nextCast,
-                        windowID: windowID
-                    )
-                    if !canContinue { break }
-                    continue
-                }
-
-                let now = Date().timeIntervalSince1970
-                if now >= nextCenterAdjustAt {
-                    await centerAdjustStep(
-                        currentX: player.x,
-                        baseX: baseX,
-                        adjustDurationMS: settings.followHealAdjustDurationMS,
-                        buffs: buffs,
-                        nextCast: &nextCast,
-                        windowID: windowID
-                    )
-                    nextCenterAdjustAt = Date().timeIntervalSince1970 + FollowHealNavigation.nextCenterAdjustInterval()
-                    continue
-                }
-            } else {
-                missingPlayerCount += 1
-                await human.stopMove()
-                if missingPlayerCount == 1 || missingPlayerCount % 8 == 0 {
-                    log("⚠️ 暂时丢失玩家黄点 \(missingPlayerCount) 次：\(minimap.lastPlayerDetectionSummary)")
-                }
-            }
-
-            await performHealCycle(
+            await performContinuousHealCycle(
                 healKey: settings.healSkillKey,
+                teleportKey: settings.teleportSkillKey,
+                baseX: baseX,
+                boundaryTolerance: boundaryTolerance,
                 buffs: buffs,
                 nextCast: &nextCast,
+                nextCenterAdjustAt: &nextCenterAdjustAt,
+                excursionGuard: &excursionGuard,
                 windowID: windowID
             )
         }
@@ -216,192 +255,117 @@ final class FollowHealWorker: ObservableObject {
         await finish(runID: currentRunID)
     }
 
-    private func returnToBase(
+    private func performContinuousHealCycle(
+        healKey: String,
+        teleportKey: String,
         baseX: CGFloat,
-        startX: CGFloat,
+        boundaryTolerance: CGFloat,
         buffs: [BuffConfig],
         nextCast: inout [Int: TimeInterval],
-        windowID: CGWindowID
-    ) async -> Bool {
-        var currentX = startX
-        guard var currentDirection = FollowHealNavigation.directionToBase(currentX: currentX, baseX: baseX) else {
-            await human.stopMove()
-            return true
-        }
-        guard await ensureGameFocus(windowID: windowID, reason: "回基准区域") else {
-            return false
-        }
-        if currentDirection == .left {
-            await human.moveLeft()
-        } else {
-            await human.moveRight()
-        }
-
-        let startedAt = Date().timeIntervalSince1970
-        while isRunning && !Task.isCancelled {
-            if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) {
-                return true
-            }
-            await sleep(Double.random(in: 0.08...0.14))
-            guard let player = try? await minimap.findPlayerPosition(
-                minArea: FollowHealNavigation.playerMarkerMinArea
-            ) else {
-                await human.stopMove()
-                log("⚠️ 回基准区域时丢失玩家黄点，停止移动")
-                return true
-            }
-            currentX = player.x
-            logPlayerCoordinateIfDue(
-                player,
-                baseX: baseX,
-                phase: "回基准移动"
-            )
-            if !FollowHealNavigation.isOutsideAnchorBand(currentX: currentX, baseX: baseX) {
-                await human.stopMove()
-                log("已回到基准区域：当前X=\(format(currentX))，基准X=\(format(baseX))")
-                return true
-            }
-            guard let neededDirection = FollowHealNavigation.directionToBase(currentX: currentX, baseX: baseX) else {
-                await human.stopMove()
-                return true
-            }
-            if neededDirection != currentDirection {
-                await human.stopMove()
-                await randomSleep(0.08...0.18)
-                if neededDirection == .left {
-                    await human.moveLeft()
-                } else {
-                    await human.moveRight()
-                }
-                currentDirection = neededDirection
-            }
-            if Date().timeIntervalSince1970 - startedAt > 5 {
-                await human.stopMove()
-                log("⚠️ 回基准区域超时，停止移动等待下轮检测")
-                return true
-            }
-        }
-        await human.stopMove()
-        return true
-    }
-
-    private func centerAdjustStep(
-        currentX: CGFloat,
-        baseX: CGFloat,
-        adjustDurationMS: ClosedRange<Int>,
-        buffs: [BuffConfig],
-        nextCast: inout [Int: TimeInterval],
+        nextCenterAdjustAt: inout TimeInterval,
+        excursionGuard: inout FollowHealNavigation.TeleportExcursionGuard,
         windowID: CGWindowID
     ) async {
-        let direction = FollowHealNavigation.directionForCenterAdjustment(currentX: currentX, baseX: baseX)
-        log("跟补修正：当前X=\(format(currentX))，向\(direction == .left ? "左" : "右")小走后继续补血")
-        if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) {
-            return
-        }
-        guard await ensureGameFocus(windowID: windowID, reason: "跟补修正") else {
-            return
-        }
-        if direction == .left {
-            await human.moveLeft()
-        } else {
-            await human.moveRight()
-        }
-        let durationMS = Int.random(in: adjustDurationMS)
-        await sleep(Double(durationMS) / 1000)
-        await human.stopMove()
-        await randomSleep(0.22...0.75)
-    }
-
-    private func performHealCycle(
-        healKey: String,
-        buffs: [BuffConfig],
-        nextCast: inout [Int: TimeInterval],
-        windowID: CGWindowID
-    ) async {
-        if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) {
-            return
-        }
-        guard await ensureGameFocus(windowID: windowID, reason: "释放加血技能") else {
+        guard await ensureGameFocus(windowID: windowID, reason: "持续释放加血技能") else {
             return
         }
 
-        let roll = Int.random(in: 1...100)
-        if roll <= 25 {
-            await burstHeal(healKey: healKey, buffs: buffs, nextCast: &nextCast, windowID: windowID)
-        } else if roll <= 45 {
-            await timedHealTap(
-                healKey: healKey,
-                holdMS: 180...420,
-                afterDelay: 0.12...0.30
-            )
-        } else {
-            await interruptibleHealHold(
-                healKey: healKey,
-                holdMS: 650...1400,
-                buffs: buffs,
-                nextCast: &nextCast,
-                windowID: windowID
-            )
-            await randomSleep(0.16...0.36)
-        }
-    }
-
-    private func burstHeal(
-        healKey: String,
-        buffs: [BuffConfig],
-        nextCast: inout [Int: TimeInterval],
-        windowID: CGWindowID
-    ) async {
-        let count = Int.random(in: 2...4)
-        for index in 0..<count where isRunning && !Task.isCancelled {
-            if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) {
-                return
-            }
-            await timedHealTap(healKey: healKey, holdMS: 45...120, afterDelay: 0.06...0.18)
-            if index == count - 1 {
-                await randomSleep(0.12...0.35)
-            }
-        }
-    }
-
-    private func timedHealTap(
-        healKey: String,
-        holdMS: ClosedRange<Int>,
-        afterDelay: ClosedRange<Double>
-    ) async {
+        let healKeyCode: CGKeyCode
         do {
-            _ = try await human.tapNamedKey(healKey, holdMS: holdMS)
-            await randomSleep(afterDelay)
-        } catch {
-            onError?("加血键错误: \(error.localizedDescription)")
-        }
-    }
-
-    private func interruptibleHealHold(
-        healKey: String,
-        holdMS: ClosedRange<Int>,
-        buffs: [BuffConfig],
-        nextCast: inout [Int: TimeInterval],
-        windowID: CGWindowID
-    ) async {
-        let keyCode: CGKeyCode
-        do {
-            keyCode = try await human.holdNamedKey(healKey)
+            healKeyCode = try await human.holdNamedKey(healKey)
         } catch {
             onError?("加血键错误: \(error.localizedDescription)")
             return
         }
-
-        let endAt = Date().timeIntervalSince1970 + Double.random(in: Double(holdMS.lowerBound)...Double(holdMS.upperBound)) / 1000
+        let endAt = Date().timeIntervalSince1970 + Double.random(in: 10...15)
+        var missingPlayerCount = 0
         while isRunning && !Task.isCancelled && Date().timeIntervalSince1970 < endAt {
             if !buffsToCast(buffs: buffs, nextCast: nextCast, includeUpcoming: false).isEmpty {
-                await human.releaseKey(keyCode)
+                await human.releaseKey(healKeyCode)
                 _ = await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID)
                 return
             }
-            await randomSleep(0.10...0.15)
+            guard windowSelector.isWindowValid(windowID: windowID),
+                  windowSelector.isWindowOwnerFrontmost(windowID: windowID) else {
+                await human.releaseKey(healKeyCode)
+                return
+            }
+
+            if minimap.minimapSize != nil,
+               let player = try? await minimap.findPlayerPosition(
+                   minArea: FollowHealNavigation.playerMarkerMinArea
+               ) {
+                missingPlayerCount = 0
+                logPlayerCoordinateIfDue(player, baseX: baseX, phase: "持续补血")
+                let now = Date().timeIntervalSince1970
+                let isNewExcursion = excursionGuard.shouldCorrect(
+                    currentX: player.x,
+                    baseX: baseX,
+                    tolerance: boundaryTolerance
+                )
+                let isScheduledAdjustment = now >= nextCenterAdjustAt
+                if isNewExcursion || isScheduledAdjustment {
+                    if let direction = FollowHealNavigation.teleportDirectionToBase(
+                        currentX: player.x,
+                        baseX: baseX
+                    ) {
+                        let teleported = await teleportTowardBase(
+                            direction: direction,
+                            teleportKey: teleportKey,
+                            currentX: player.x,
+                            baseX: baseX,
+                            urgent: isNewExcursion
+                        )
+                        if teleported {
+                            excursionGuard.recordTeleport(direction: direction)
+                        }
+                    }
+                    nextCenterAdjustAt = Date().timeIntervalSince1970
+                        + FollowHealNavigation.nextCenterAdjustInterval()
+                }
+            } else if minimap.minimapSize != nil {
+                missingPlayerCount += 1
+                if missingPlayerCount == 1 || missingPlayerCount % 8 == 0 {
+                    log("⚠️ 暂时丢失玩家黄点 \(missingPlayerCount) 次：\(minimap.lastPlayerDetectionSummary)")
+                }
+            }
+            await randomSleep(0.035...0.065)
         }
-        await human.releaseKey(keyCode)
+        await human.releaseKey(healKeyCode)
+        if isRunning && !Task.isCancelled {
+            await randomSleep(0.18...0.45)
+        }
+    }
+
+    private func teleportTowardBase(
+        direction: HumanInput.Direction,
+        teleportKey: String,
+        currentX: CGFloat,
+        baseX: CGFloat,
+        urgent: Bool
+    ) async -> Bool {
+        log(
+            "\(urgent ? "快速回位" : "跟补修正")：当前X=\(format(currentX))，"
+                + "按住\(direction == .left ? "左" : "右")方向并短按瞬移"
+        )
+        do {
+            try await human.performDirectionalSkill(
+                direction,
+                skillKey: teleportKey,
+                directionLeadMS: Int.random(in: 35...75),
+                skillHoldMS: Int.random(in: 50...110),
+                directionReleaseDelayMS: Int.random(in: 25...65)
+            )
+            // Let the marker settle before observing the result. The new
+            // position never causes an immediate reverse teleport.
+            await randomSleep(0.50...0.80)
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            onError?("瞬移键错误: \(error.localizedDescription)")
+            return false
+        }
     }
 
     private func castIfBuffDue(
@@ -414,7 +378,7 @@ final class FollowHealWorker: ObservableObject {
         let batch = buffsToCast(buffs: buffs, nextCast: nextCast, includeUpcoming: true)
         await human.stopMove()
         _ = await castAllReady(buffs: batch, nextCast: &nextCast, windowID: windowID)
-        await randomSleep(0.8...1.2)
+        await randomSleep(0.18...0.42)
         return true
     }
 

@@ -123,6 +123,38 @@ actor HumanInput {
         KeyboardUtils.postKey(keyCode, keyDown: false)
         pressedNamedKeyCodes.remove(keyCode)
     }
+
+    /// Keeps any already-held named key (for example, heal) pressed while
+    /// performing direction-down -> skill tap -> skill-up -> direction-up.
+    func performDirectionalSkill(
+        _ direction: Direction,
+        skillKey: String,
+        directionLeadMS: Int,
+        skillHoldMS: Int,
+        directionReleaseDelayMS: Int
+    ) async throws {
+        let directionCode = keyCode(for: direction)
+        var skillCode: CGKeyCode?
+        pressDirectionRaw(direction)
+        do {
+            try await Task.sleep(for: .milliseconds(directionLeadMS))
+            try Task.checkCancellation()
+            skillCode = try pressNamedKeyDown(skillKey)
+            try await Task.sleep(for: .milliseconds(skillHoldMS))
+            if let skillCode {
+                releaseKey(skillCode)
+            }
+            try await Task.sleep(for: .milliseconds(directionReleaseDelayMS))
+            releaseDirectionRaw(direction)
+        } catch {
+            if let skillCode {
+                releaseKey(skillCode)
+            }
+            KeyboardUtils.postKey(directionCode, keyDown: false)
+            pressedDirectionKeyCodes.remove(directionCode)
+            throw error
+        }
+    }
     
     func releaseAll() {
         currentDirection = nil

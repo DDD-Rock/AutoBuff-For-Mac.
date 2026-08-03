@@ -76,7 +76,7 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 8
 
     var schemaVersion: Int = currentSchemaVersion
     var mode: AppMode = .deadFlower
@@ -90,8 +90,10 @@ struct AppSettings: Codable, Equatable {
     var ropePartyInviteRoleNames: [String] = []
     var jumpKey: String = "Alt"
     var healSkillKey: String = ""
+    var teleportSkillKey: String = ""
     var healAnchorX: Int? = nil
     var healAnchorY: Int? = nil
+    var followHealBoundaryTolerance: Double = 6
     var healMinimapRegionX: Int? = nil
     var healMinimapRegionY: Int? = nil
     var healMinimapRegionWidth: Int? = nil
@@ -100,8 +102,6 @@ struct AppSettings: Codable, Equatable {
     var chairKey: String = "="
     var randomBehaviorEnabled: Bool = true
     var randomBehaviorValue: Int = 20
-    var followHealAdjustMinMS: Int = 200
-    var followHealAdjustMaxMS: Int = 300
     var autoAcceptPartyInviteEnabled: Bool = false
     var movementMode: MovementMode = .none
     var preSkillMoveMode: PreSkillMoveMode = .rightOnly
@@ -138,8 +138,10 @@ extension AppSettings {
         case ropePartyInviteRoleNames
         case jumpKey
         case healSkillKey
+        case teleportSkillKey
         case healAnchorX
         case healAnchorY
+        case followHealBoundaryTolerance
         case healMinimapRegionX
         case healMinimapRegionY
         case healMinimapRegionWidth
@@ -148,8 +150,6 @@ extension AppSettings {
         case chairKey
         case randomBehaviorEnabled
         case randomBehaviorValue
-        case followHealAdjustMinMS
-        case followHealAdjustMaxMS
         case autoAcceptPartyInviteEnabled
         case movementMode
         case preSkillMoveMode
@@ -194,8 +194,13 @@ extension AppSettings {
         ) ?? []
         self.jumpKey = try container.decodeIfPresent(String.self, forKey: .jumpKey) ?? "Alt"
         self.healSkillKey = try container.decodeIfPresent(String.self, forKey: .healSkillKey) ?? ""
+        self.teleportSkillKey = try container.decodeIfPresent(String.self, forKey: .teleportSkillKey) ?? ""
         self.healAnchorX = try container.decodeIfPresent(Int.self, forKey: .healAnchorX)
         self.healAnchorY = try container.decodeIfPresent(Int.self, forKey: .healAnchorY)
+        self.followHealBoundaryTolerance = try container.decodeIfPresent(
+            Double.self,
+            forKey: .followHealBoundaryTolerance
+        ) ?? 6
         self.healMinimapRegionX = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionX)
         self.healMinimapRegionY = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionY)
         self.healMinimapRegionWidth = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionWidth)
@@ -204,8 +209,6 @@ extension AppSettings {
         self.chairKey = try container.decodeIfPresent(String.self, forKey: .chairKey) ?? "="
         self.randomBehaviorEnabled = try container.decodeIfPresent(Bool.self, forKey: .randomBehaviorEnabled) ?? true
         self.randomBehaviorValue = try container.decodeIfPresent(Int.self, forKey: .randomBehaviorValue) ?? 20
-        self.followHealAdjustMinMS = try container.decodeIfPresent(Int.self, forKey: .followHealAdjustMinMS) ?? 200
-        self.followHealAdjustMaxMS = try container.decodeIfPresent(Int.self, forKey: .followHealAdjustMaxMS) ?? 300
         self.autoAcceptPartyInviteEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoAcceptPartyInviteEnabled) ?? false
         self.movementMode = try container.decodeIfPresent(MovementMode.self, forKey: .movementMode) ?? .none
         self.preSkillMoveMode = try container.decodeIfPresent(PreSkillMoveMode.self, forKey: .preSkillMoveMode) ?? .rightOnly
@@ -255,8 +258,10 @@ extension AppSettings {
         try container.encode(ropePartyInviteRoleNames, forKey: .ropePartyInviteRoleNames)
         try container.encode(jumpKey, forKey: .jumpKey)
         try container.encode(healSkillKey, forKey: .healSkillKey)
+        try container.encode(teleportSkillKey, forKey: .teleportSkillKey)
         try container.encodeIfPresent(healAnchorX, forKey: .healAnchorX)
         try container.encodeIfPresent(healAnchorY, forKey: .healAnchorY)
+        try container.encode(followHealBoundaryTolerance, forKey: .followHealBoundaryTolerance)
         try container.encodeIfPresent(healMinimapRegionX, forKey: .healMinimapRegionX)
         try container.encodeIfPresent(healMinimapRegionY, forKey: .healMinimapRegionY)
         try container.encodeIfPresent(healMinimapRegionWidth, forKey: .healMinimapRegionWidth)
@@ -265,8 +270,6 @@ extension AppSettings {
         try container.encode(chairKey, forKey: .chairKey)
         try container.encode(randomBehaviorEnabled, forKey: .randomBehaviorEnabled)
         try container.encode(randomBehaviorValue, forKey: .randomBehaviorValue)
-        try container.encode(followHealAdjustMinMS, forKey: .followHealAdjustMinMS)
-        try container.encode(followHealAdjustMaxMS, forKey: .followHealAdjustMaxMS)
         try container.encode(autoAcceptPartyInviteEnabled, forKey: .autoAcceptPartyInviteEnabled)
         try container.encode(movementMode, forKey: .movementMode)
         try container.encode(preSkillMoveMode, forKey: .preSkillMoveMode)
@@ -288,12 +291,6 @@ extension AppSettings {
         let minimum = max(1, min(loungeMoveMinMinutes, loungeMoveMaxMinutes))
         let maximum = min(24 * 60, max(loungeMoveMinMinutes, loungeMoveMaxMinutes))
         return minimum...max(minimum, maximum)
-    }
-
-    var followHealAdjustDurationMS: ClosedRange<Int> {
-        let minValue = max(50, min(followHealAdjustMinMS, followHealAdjustMaxMS))
-        let maxValue = min(1000, max(followHealAdjustMinMS, followHealAdjustMaxMS))
-        return minValue...maxValue
     }
 
     var healMinimapRegion: CGRect? {

@@ -52,6 +52,7 @@ struct SettingsManagerTests {
             BuffConfig(id: $0.id, enabled: false, key: $0.key, duration: $0.duration)
         }
         settings.healSkillKey = "Q"
+        settings.teleportSkillKey = "W"
         settings.healAnchorX = 50
 
         let errors = WorkerConfigurationValidator.validationErrors(
@@ -194,11 +195,11 @@ struct SettingsManagerTests {
         var settings = AppSettings.default
         settings.mode = .followHeal
         settings.healSkillKey = "Q"
+        settings.teleportSkillKey = "W"
         settings.healAnchorX = 77
         settings.healAnchorY = 12
+        settings.followHealBoundaryTolerance = 9.5
         settings.healMinimapRegion = CGRect(x: 8, y: 120, width: 164, height: 86)
-        settings.followHealAdjustMinMS = 220
-        settings.followHealAdjustMaxMS = 330
 
         let manager = SettingsManager(settingsDirectory: tempDir)
         manager.save(settings)
@@ -207,11 +208,11 @@ struct SettingsManagerTests {
         #expect(loaded.mode == .followHeal)
         #expect(loaded.returnToMarket == false)
         #expect(loaded.healSkillKey == "Q")
+        #expect(loaded.teleportSkillKey == "W")
         #expect(loaded.healAnchorX == 77)
         #expect(loaded.healAnchorY == 12)
+        #expect(loaded.followHealBoundaryTolerance == 9.5)
         #expect(loaded.healMinimapRegion == CGRect(x: 8, y: 120, width: 164, height: 86))
-        #expect(loaded.followHealAdjustMinMS == 220)
-        #expect(loaded.followHealAdjustMaxMS == 330)
     }
 
     @Test func templeModeAndFunctionPersist() throws {
@@ -793,10 +794,10 @@ struct SettingsManagerTests {
         #expect(!DialogConfirmButtonValidator.isPlausible(in: image, match: match))
     }
 
-    @Test func followHealNavigationChoosesDirectionToBase() {
-        #expect(FollowHealNavigation.directionToBase(currentX: 104, baseX: 100) == .left)
-        #expect(FollowHealNavigation.directionToBase(currentX: 96, baseX: 100) == .right)
-        #expect(FollowHealNavigation.directionToBase(currentX: 102.5, baseX: 100) == nil)
+    @Test func followHealTeleportAlwaysTargetsTheExactBaseSide() {
+        #expect(FollowHealNavigation.teleportDirectionToBase(currentX: 99.5, baseX: 100) == .right)
+        #expect(FollowHealNavigation.teleportDirectionToBase(currentX: 100.5, baseX: 100) == .left)
+        #expect(FollowHealNavigation.teleportDirectionToBase(currentX: 100, baseX: 100) == nil)
     }
 
     @Test func playerDetectionPrefersTheCandidateNearTheMarkedAnchor() {
@@ -850,25 +851,66 @@ struct SettingsManagerTests {
         #expect(result.selectedArea == 30)
     }
 
-    @Test func followHealCenterAdjustmentMovesTowardBaseOrRightWhenCentered() {
-        #expect(FollowHealNavigation.directionForCenterAdjustment(currentX: 104, baseX: 100) == .left)
-        #expect(FollowHealNavigation.directionForCenterAdjustment(currentX: 96, baseX: 100) == .right)
-        #expect(FollowHealNavigation.directionForCenterAdjustment(currentX: 102.5, baseX: 100) == .right)
-    }
-
     @Test func followHealAnchorBandAllowsSmallSideSteps() {
-        #expect(!FollowHealNavigation.isOutsideAnchorBand(currentX: 106, baseX: 100))
-        #expect(!FollowHealNavigation.isOutsideAnchorBand(currentX: 94, baseX: 100))
-        #expect(FollowHealNavigation.isOutsideAnchorBand(currentX: 106.5, baseX: 100))
-        #expect(FollowHealNavigation.isOutsideAnchorBand(currentX: 93.5, baseX: 100))
+        #expect(!FollowHealNavigation.isOutsideAnchorBand(currentX: 109.5, baseX: 100, tolerance: 9.5))
+        #expect(!FollowHealNavigation.isOutsideAnchorBand(currentX: 90.5, baseX: 100, tolerance: 9.5))
+        #expect(FollowHealNavigation.isOutsideAnchorBand(currentX: 110, baseX: 100, tolerance: 9.5))
+        #expect(FollowHealNavigation.isOutsideAnchorBand(currentX: 90, baseX: 100, tolerance: 9.5))
     }
 
     @Test func followHealCenterAdjustIntervalIsFrequent() {
         for _ in 0..<20 {
             let interval = FollowHealNavigation.nextCenterAdjustInterval()
-            #expect(interval >= 12)
-            #expect(interval <= 15)
+            #expect(interval >= 10)
+            #expect(interval <= 13)
         }
+    }
+
+    @Test func followHealNewExcursionCorrectsImmediately() {
+        var guardState = FollowHealNavigation.TeleportExcursionGuard()
+        let shouldCorrect = guardState.shouldCorrect(currentX: 108, baseX: 100, tolerance: 6)
+
+        #expect(shouldCorrect)
+    }
+
+    @Test func followHealCrossingAnchorDoesNotImmediatelyReverse() {
+        var guardState = FollowHealNavigation.TeleportExcursionGuard()
+        guardState.recordTeleport(direction: .right)
+        let firstObservation = guardState.shouldCorrect(currentX: 108, baseX: 100, tolerance: 6)
+        let secondObservation = guardState.shouldCorrect(currentX: 108.5, baseX: 100, tolerance: 6)
+
+        #expect(!firstObservation)
+        #expect(!secondObservation)
+    }
+
+    @Test func followHealNewCollisionBreaksReverseGuard() {
+        var guardState = FollowHealNavigation.TeleportExcursionGuard()
+        guardState.recordTeleport(direction: .right)
+        let crossedAnchor = guardState.shouldCorrect(currentX: 108, baseX: 100, tolerance: 6)
+        let collidedAgain = guardState.shouldCorrect(currentX: 109.1, baseX: 100, tolerance: 6)
+
+        #expect(!crossedAnchor)
+        #expect(collidedAgain)
+    }
+
+    @Test func followHealSameDirectionRetriesAfterMarkerSettles() {
+        var guardState = FollowHealNavigation.TeleportExcursionGuard()
+        guardState.recordTeleport(direction: .right)
+        let shouldRetry = guardState.shouldCorrect(currentX: 92, baseX: 100, tolerance: 6)
+
+        #expect(shouldRetry)
+    }
+
+    @Test func followHealReturningInsideResetsReverseGuard() {
+        var guardState = FollowHealNavigation.TeleportExcursionGuard()
+        guardState.recordTeleport(direction: .right)
+        let crossedAnchor = guardState.shouldCorrect(currentX: 108, baseX: 100, tolerance: 6)
+        let returnedInside = guardState.shouldCorrect(currentX: 104, baseX: 100, tolerance: 6)
+        let collidedAgain = guardState.shouldCorrect(currentX: 108, baseX: 100, tolerance: 6)
+
+        #expect(!crossedAnchor)
+        #expect(!returnedInside)
+        #expect(collidedAgain)
     }
 
     @Test func keyCodeMapUsesRealMacKeyPositions() {

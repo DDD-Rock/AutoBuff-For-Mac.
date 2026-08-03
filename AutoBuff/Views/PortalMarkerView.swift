@@ -8,6 +8,10 @@ struct PortalMarkerView: View {
     let existingY: Int?
     var title = "标记传送门位置"
     var portalWidthThreshold: Binding<Double>? = nil
+    var thresholdTitle = "传送门宽度阈值"
+    var thresholdRange: ClosedRange<Double> = 0.5...20
+    var thresholdStep: Double = 0.5
+    var thresholdAccessibilityIdentifier = "portal.widthThreshold"
     var showAutoPortal = true
     var clearButtonTitle = "清除手动标记"
     var loadedStatusText = "蓝色范围=自动检测，红色范围=手动标记；两侧边界距标记点等于导航阈值"
@@ -155,19 +159,19 @@ struct PortalMarkerView: View {
             }
             if let portalWidthThreshold {
                 HStack(spacing: 10) {
-                    Text("传送门宽度阈值")
+                    Text(thresholdTitle)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(AppTheme.textPrimary)
                     Spacer()
                     Stepper(
                         portalWidthThreshold.wrappedValue.formatted(.number.precision(.fractionLength(1))),
                         value: portalWidthThreshold,
-                        in: 0.5...20,
-                        step: 0.5
+                        in: thresholdRange,
+                        step: thresholdStep
                     )
                     .font(.system(size: 11))
                     .fixedSize()
-                    .accessibilityIdentifier("portal.widthThreshold")
+                    .accessibilityIdentifier(thresholdAccessibilityIdentifier)
                 }
                 .padding(.horizontal, 8)
                 .frame(minHeight: 28)

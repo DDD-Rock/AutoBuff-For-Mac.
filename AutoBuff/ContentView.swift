@@ -94,16 +94,32 @@ struct ContentView: View {
                     existingX: viewModel.settings.healAnchorX,
                     existingY: viewModel.settings.healAnchorY,
                     title: "标记跟补基准点",
+                    portalWidthThreshold: Binding(
+                        get: { viewModel.settings.followHealBoundaryTolerance },
+                        set: { value in
+                            viewModel.settings.followHealBoundaryTolerance = value
+                            viewModel.saveSettings()
+                        }
+                    ),
+                    thresholdTitle: "左右界限值（基准点 ±）",
+                    thresholdRange: 1...50,
+                    thresholdStep: 0.5,
+                    thresholdAccessibilityIdentifier: "followHeal.boundaryTolerance",
                     showAutoPortal: false,
                     clearButtonTitle: "清除基准点",
-                    loadedStatusText: "红点=跟补基准点，运行时只使用该点的 X 坐标"
+                    loadedStatusText: "红点=跟补基准点，红色区域与两侧竖线=允许的左右界限"
                 ) { x, y, region in
                     viewModel.settings.healAnchorX = x
                     viewModel.settings.healAnchorY = y
                     viewModel.settings.healMinimapRegion = (x != nil && y != nil) ? region : nil
                     viewModel.saveSettings()
                     if let x, let y {
-                        viewModel.appendLog("跟补基准点已标记: \(x), \(y)")
+                        viewModel.appendLog(
+                            "跟补基准点已标记: \(x), \(y)，左右界限 ±"
+                                + viewModel.settings.followHealBoundaryTolerance.formatted(
+                                    .number.precision(.fractionLength(1))
+                                )
+                        )
                     } else {
                         viewModel.appendLog("已清除跟补基准点")
                     }

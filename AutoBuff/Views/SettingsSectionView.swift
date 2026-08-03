@@ -372,33 +372,22 @@ struct SettingsSectionView: View {
 
             Divider().frame(height: 44)
 
+            optionColumn("瞬移技能键") {
+                Button(viewModel.settings.teleportSkillKey.isEmpty ? "选键" : viewModel.settings.teleportSkillKey) {
+                    viewModel.openKeyboard(for: .teleportSkillKey)
+                }
+                .controlSize(.small)
+                .frame(width: 58)
+            }
+
+            Divider().frame(height: 44)
+
             optionColumn("基准点") {
                 Button(followHealAnchorTitle) {
                     viewModel.requestFollowHealMarker()
                 }
                 .controlSize(.small)
-                .frame(width: 86)
-            }
-
-            Divider().frame(height: 54)
-
-            optionColumn("修正按住") {
-                VStack(alignment: .leading, spacing: 2) {
-                    Stepper(
-                        "最短 \(viewModel.settings.followHealAdjustMinMS)ms",
-                        value: $viewModel.settings.followHealAdjustMinMS,
-                        in: 50...1000,
-                        step: 10
-                    )
-                    Stepper(
-                        "最长 \(viewModel.settings.followHealAdjustMaxMS)ms",
-                        value: $viewModel.settings.followHealAdjustMaxMS,
-                        in: 50...1000,
-                        step: 10
-                    )
-                }
-                .font(.system(size: 10))
-                .frame(width: 96, alignment: .leading)
+                .frame(width: 108)
             }
 
             Spacer(minLength: 0)
@@ -409,7 +398,11 @@ struct SettingsSectionView: View {
 
     private var followHealAnchorTitle: String {
         if let x = viewModel.settings.healAnchorX {
-            return "X \(x)"
+            let tolerance = viewModel.settings.followHealBoundaryTolerance
+            let toleranceText = tolerance == tolerance.rounded()
+                ? String(Int(tolerance))
+                : tolerance.formatted(.number.precision(.fractionLength(1)))
+            return "X \(x) ±\(toleranceText)"
         }
         return "标记点位"
     }

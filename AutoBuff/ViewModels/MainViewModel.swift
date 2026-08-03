@@ -100,6 +100,7 @@ final class MainViewModel: ObservableObject {
         case jumpKey
         case chairKey
         case healSkillKey
+        case teleportSkillKey
     }
 
     struct PortalMarkerAlert: Identifiable {
@@ -369,6 +370,8 @@ final class MainViewModel: ObservableObject {
             settings.chairKey = key
         case .healSkillKey:
             settings.healSkillKey = key
+        case .teleportSkillKey:
+            settings.teleportSkillKey = key
         }
         saveSettings()
     }
@@ -1248,8 +1251,18 @@ enum WorkerConfigurationValidator {
             } else if KeyCodeMap.virtualKeyCode(for: settings.healSkillKey) == nil {
                 errors.append("加血技能键“\(settings.healSkillKey)”不受支持")
             }
+            if settings.teleportSkillKey.isEmpty {
+                errors.append("请设置瞬移技能键")
+            } else if KeyCodeMap.virtualKeyCode(for: settings.teleportSkillKey) == nil {
+                errors.append("瞬移技能键“\(settings.teleportSkillKey)”不受支持")
+            } else if settings.teleportSkillKey == settings.healSkillKey {
+                errors.append("瞬移技能键不能与加血技能键相同")
+            }
             if settings.healAnchorX == nil {
                 errors.append("请先标记跟补基准点")
+            }
+            if settings.followHealBoundaryTolerance < 1 || settings.followHealBoundaryTolerance > 50 {
+                errors.append("跟补左右界限值需为 1～50")
             }
         }
         return errors
