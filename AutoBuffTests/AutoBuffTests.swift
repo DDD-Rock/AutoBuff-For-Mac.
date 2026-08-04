@@ -892,6 +892,29 @@ struct SettingsManagerTests {
         #expect(FollowHealNavigation.healGapRange == 0.25...0.60)
     }
 
+    @Test func followHealProtectiveBoundaryTriggersBeforeHardBoundary() {
+        #expect(FollowHealNavigation.protectiveAnchorTolerance(6) == 4.5)
+        #expect(FollowHealNavigation.protectiveAnchorTolerance(10) == 7.5)
+    }
+
+    @Test func followHealLeftHardBoundaryForcesImmediateRecovery() {
+        #expect(FollowHealNavigation.requiresImmediateLeftRecovery(
+            currentX: 93.9,
+            baseX: 100,
+            boundaryTolerance: 6
+        ))
+        #expect(!FollowHealNavigation.requiresImmediateLeftRecovery(
+            currentX: 94,
+            baseX: 100,
+            boundaryTolerance: 6
+        ))
+        #expect(!FollowHealNavigation.requiresImmediateLeftRecovery(
+            currentX: 108,
+            baseX: 100,
+            boundaryTolerance: 6
+        ))
+    }
+
     @Test func followHealNewExcursionCorrectsImmediately() {
         var guardState = FollowHealNavigation.TeleportExcursionGuard()
         let shouldCorrect = guardState.shouldCorrect(currentX: 108, baseX: 100, tolerance: 6)

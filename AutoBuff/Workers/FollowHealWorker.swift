@@ -7,6 +7,7 @@ enum FollowHealNavigation {
     static let healHoldRange: ClosedRange<TimeInterval> = 8...12
     static let healGapRange: ClosedRange<TimeInterval> = 0.25...0.60
     static let newCollisionDistance: CGFloat = 1
+    static let protectiveBoundaryRatio: CGFloat = 0.75
 
     struct TeleportExcursionGuard {
         private(set) var lastTeleportDirection: HumanInput.Direction?
@@ -93,6 +94,18 @@ enum FollowHealNavigation {
         tolerance: CGFloat
     ) -> Bool {
         abs(currentX - baseX) > tolerance
+    }
+
+    static func protectiveAnchorTolerance(_ boundaryTolerance: CGFloat) -> CGFloat {
+        max(0.5, boundaryTolerance * protectiveBoundaryRatio)
+    }
+
+    static func requiresImmediateLeftRecovery(
+        currentX: CGFloat,
+        baseX: CGFloat,
+        boundaryTolerance: CGFloat
+    ) -> Bool {
+        currentX < baseX - max(0, boundaryTolerance)
     }
 
     static func nextCenterAdjustInterval() -> TimeInterval {
@@ -186,7 +199,14 @@ final class FollowHealWorker: ObservableObject {
 
         let baseX = CGFloat(healAnchorX)
         let boundaryTolerance = CGFloat(settings.followHealBoundaryTolerance)
-        log("使用手动跟补基准点 X=\(format(baseX))，左右界限 ±\(format(boundaryTolerance))")
+        let protectiveTolerance = FollowHealNavigation.protectiveAnchorTolerance(
+            boundaryTolerance
+        )
+        log(
+            "使用手动跟补基准点 X=\(format(baseX))，"
+                + "左右界限 ±\(format(boundaryTolerance))，"
+                + "提前保护 ±\(format(protectiveTolerance))"
+        )
         if let savedRegion = settings.healMinimapRegion {
             minimap.clearMinimapRegion()
             minimap.setMinimapRegion(savedRegion)
@@ -235,7 +255,8 @@ final class FollowHealWorker: ObservableObject {
                     healKey: settings.healSkillKey,
                     teleportKey: settings.teleportSkillKey,
                     baseX: baseX,
-                    boundaryTolerance: boundaryTolerance,
+                    boundaryTolerance: protectiveTolerance,
+                    hardBoundaryTolerance: boundaryTolerance,
                     buffs: buffs,
                     nextCast: &nextCast,
                     nextCenterAdjustAt: &nextCenterAdjustAt,
@@ -254,7 +275,8 @@ final class FollowHealWorker: ObservableObject {
                 healKey: settings.healSkillKey,
                 teleportKey: settings.teleportSkillKey,
                 baseX: baseX,
-                boundaryTolerance: boundaryTolerance,
+                boundaryTolerance: protectiveTolerance,
+                hardBoundaryTolerance: boundaryTolerance,
                 buffs: buffs,
                 nextCast: &nextCast,
                 nextCenterAdjustAt: &nextCenterAdjustAt,
@@ -271,6 +293,7 @@ final class FollowHealWorker: ObservableObject {
         teleportKey: String,
         baseX: CGFloat,
         boundaryTolerance: CGFloat,
+        hardBoundaryTolerance: CGFloat,
         buffs: [BuffConfig],
         nextCast: inout [Int: TimeInterval],
         nextCenterAdjustAt: inout TimeInterval,
@@ -315,8 +338,13 @@ final class FollowHealWorker: ObservableObject {
                     baseX: baseX,
                     tolerance: boundaryTolerance
                 )
+                let forceLeftRecovery = FollowHealNavigation.requiresImmediateLeftRecovery(
+                    currentX: player.x,
+                    baseX: baseX,
+                    boundaryTolerance: hardBoundaryTolerance
+                )
                 let isScheduledAdjustment = now >= nextCenterAdjustAt
-                if isNewExcursion || isScheduledAdjustment {
+                if isNewExcursion || forceLeftRecovery || isScheduledAdjustment {
                     if let direction = FollowHealNavigation.teleportDirectionToBase(
                         currentX: player.x,
                         baseX: baseX
@@ -326,7 +354,7 @@ final class FollowHealWorker: ObservableObject {
                             teleportKey: teleportKey,
                             currentX: player.x,
                             baseX: baseX,
-                            urgent: isNewExcursion
+                            urgent: isNewExcursion || forceLeftRecovery
                         )
                         if teleported {
                             excursionGuard.recordTeleport(direction: direction)
@@ -371,15 +399,45 @@ final class FollowHealWorker: ObservableObject {
                 skillHoldMS: Int.random(in: 50...110),
                 directionReleaseDelayMS: Int.random(in: 25...65)
             )
-            // Let the marker settle before observing the result. The new
-            // position never causes an immediate reverse teleport.
-            await randomSleep(0.50...0.80)
+            if urgent {
+                await waitForPlayerMarkerStability()
+            } else {
+                await randomSleep(0.50...0.80)
+            }
             return true
         } catch is CancellationError {
             return false
         } catch {
             onError?("瞬移键错误: \(error.localizedDescription)")
             return false
+        }
+    }
+
+    private func waitForPlayerMarkerStability() async {
+        let startedAt = Date().timeIntervalSince1970
+        let minimumEnd = startedAt + Double.random(in: 0.15...0.25)
+        let deadline = startedAt + 0.40
+        var previousX: CGFloat?
+        var stableFrames = 0
+
+        while isRunning && !Task.isCancelled && Date().timeIntervalSince1970 < deadline {
+            if let player = try? await minimap.findPlayerPosition(
+                minArea: FollowHealNavigation.playerMarkerMinArea
+            ) {
+                if let previousX, abs(player.x - previousX) <= 0.75 {
+                    stableFrames += 1
+                } else {
+                    stableFrames = 1
+                }
+                previousX = player.x
+                if Date().timeIntervalSince1970 >= minimumEnd && stableFrames >= 2 {
+                    return
+                }
+            } else {
+                previousX = nil
+                stableFrames = 0
+            }
+            await randomSleep(0.03...0.05)
         }
     }
 
