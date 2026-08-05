@@ -25,8 +25,21 @@ enum FollowHealNavigation {
         mutating func shouldCorrect(
             currentX: CGFloat,
             baseX: CGFloat,
-            tolerance: CGFloat
+            tolerance: CGFloat,
+            priorityLeftRecoveryTolerance: CGFloat? = nil
         ) -> Bool {
+            // The platform has almost no runoff on the left, so a rightward
+            // recovery must not be suppressed as a post-teleport reversal.
+            if let priorityLeftRecoveryTolerance,
+               FollowHealNavigation.requiresImmediateLeftRecovery(
+                   currentX: currentX,
+                   baseX: baseX,
+                   boundaryTolerance: priorityLeftRecoveryTolerance
+               ) {
+                clearGuard()
+                return true
+            }
+
             guard FollowHealNavigation.isOutsideAnchorBand(
                 currentX: currentX,
                 baseX: baseX,
@@ -105,7 +118,7 @@ enum FollowHealNavigation {
         baseX: CGFloat,
         boundaryTolerance: CGFloat
     ) -> Bool {
-        currentX < baseX - max(0, boundaryTolerance)
+        currentX <= baseX - max(0, boundaryTolerance)
     }
 
     static func nextCenterAdjustInterval() -> TimeInterval {
@@ -256,7 +269,6 @@ final class FollowHealWorker: ObservableObject {
                     teleportKey: settings.teleportSkillKey,
                     baseX: baseX,
                     boundaryTolerance: protectiveTolerance,
-                    hardBoundaryTolerance: boundaryTolerance,
                     buffs: buffs,
                     nextCast: &nextCast,
                     nextCenterAdjustAt: &nextCenterAdjustAt,
@@ -276,7 +288,6 @@ final class FollowHealWorker: ObservableObject {
                 teleportKey: settings.teleportSkillKey,
                 baseX: baseX,
                 boundaryTolerance: protectiveTolerance,
-                hardBoundaryTolerance: boundaryTolerance,
                 buffs: buffs,
                 nextCast: &nextCast,
                 nextCenterAdjustAt: &nextCenterAdjustAt,
@@ -293,7 +304,6 @@ final class FollowHealWorker: ObservableObject {
         teleportKey: String,
         baseX: CGFloat,
         boundaryTolerance: CGFloat,
-        hardBoundaryTolerance: CGFloat,
         buffs: [BuffConfig],
         nextCast: inout [Int: TimeInterval],
         nextCenterAdjustAt: inout TimeInterval,
@@ -336,15 +346,11 @@ final class FollowHealWorker: ObservableObject {
                 let isNewExcursion = excursionGuard.shouldCorrect(
                     currentX: player.x,
                     baseX: baseX,
-                    tolerance: boundaryTolerance
-                )
-                let forceLeftRecovery = FollowHealNavigation.requiresImmediateLeftRecovery(
-                    currentX: player.x,
-                    baseX: baseX,
-                    boundaryTolerance: hardBoundaryTolerance
+                    tolerance: boundaryTolerance,
+                    priorityLeftRecoveryTolerance: boundaryTolerance
                 )
                 let isScheduledAdjustment = now >= nextCenterAdjustAt
-                if isNewExcursion || forceLeftRecovery || isScheduledAdjustment {
+                if isNewExcursion || isScheduledAdjustment {
                     if let direction = FollowHealNavigation.teleportDirectionToBase(
                         currentX: player.x,
                         baseX: baseX
@@ -354,7 +360,8 @@ final class FollowHealWorker: ObservableObject {
                             teleportKey: teleportKey,
                             currentX: player.x,
                             baseX: baseX,
-                            urgent: isNewExcursion || forceLeftRecovery
+                            urgent: isNewExcursion,
+                            leftRecoveryTolerance: boundaryTolerance
                         )
                         if teleported {
                             excursionGuard.recordTeleport(direction: direction)
@@ -385,7 +392,8 @@ final class FollowHealWorker: ObservableObject {
         teleportKey: String,
         currentX: CGFloat,
         baseX: CGFloat,
-        urgent: Bool
+        urgent: Bool,
+        leftRecoveryTolerance: CGFloat
     ) async -> Bool {
         log(
             "\(urgent ? "快速回位" : "跟补修正")：当前X=\(format(currentX))，"
@@ -400,7 +408,10 @@ final class FollowHealWorker: ObservableObject {
                 directionReleaseDelayMS: Int.random(in: 25...65)
             )
             if urgent {
-                await waitForPlayerMarkerStability()
+                await waitForPlayerMarkerStability(
+                    baseX: baseX,
+                    leftRecoveryTolerance: leftRecoveryTolerance
+                )
             } else {
                 await randomSleep(0.50...0.80)
             }
@@ -413,7 +424,10 @@ final class FollowHealWorker: ObservableObject {
         }
     }
 
-    private func waitForPlayerMarkerStability() async {
+    private func waitForPlayerMarkerStability(
+        baseX: CGFloat,
+        leftRecoveryTolerance: CGFloat
+    ) async {
         let startedAt = Date().timeIntervalSince1970
         let minimumEnd = startedAt + Double.random(in: 0.15...0.25)
         let deadline = startedAt + 0.40
@@ -424,6 +438,15 @@ final class FollowHealWorker: ObservableObject {
             if let player = try? await minimap.findPlayerPosition(
                 minArea: FollowHealNavigation.playerMarkerMinArea
             ) {
+                // Stop settling on the first unsafe left-side frame so the
+                // main loop can issue the rightward recovery immediately.
+                if FollowHealNavigation.requiresImmediateLeftRecovery(
+                    currentX: player.x,
+                    baseX: baseX,
+                    boundaryTolerance: leftRecoveryTolerance
+                ) {
+                    return
+                }
                 if let previousX, abs(player.x - previousX) <= 0.75 {
                     stableFrames += 1
                 } else {

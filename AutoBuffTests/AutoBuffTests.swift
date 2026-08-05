@@ -897,13 +897,13 @@ struct SettingsManagerTests {
         #expect(FollowHealNavigation.protectiveAnchorTolerance(10) == 7.5)
     }
 
-    @Test func followHealLeftHardBoundaryForcesImmediateRecovery() {
+    @Test func followHealLeftProtectiveBoundaryForcesImmediateRecovery() {
         #expect(FollowHealNavigation.requiresImmediateLeftRecovery(
             currentX: 93.9,
             baseX: 100,
             boundaryTolerance: 6
         ))
-        #expect(!FollowHealNavigation.requiresImmediateLeftRecovery(
+        #expect(FollowHealNavigation.requiresImmediateLeftRecovery(
             currentX: 94,
             baseX: 100,
             boundaryTolerance: 6
@@ -913,6 +913,20 @@ struct SettingsManagerTests {
             baseX: 100,
             boundaryTolerance: 6
         ))
+    }
+
+    @Test func followHealLeftRiskBypassesReverseTeleportGuard() {
+        var guardState = FollowHealNavigation.TeleportExcursionGuard()
+        guardState.recordTeleport(direction: .left)
+
+        let shouldRecoverRight = guardState.shouldCorrect(
+            currentX: 95.5,
+            baseX: 100,
+            tolerance: 4.5,
+            priorityLeftRecoveryTolerance: 4.5
+        )
+
+        #expect(shouldRecoverRight)
     }
 
     @Test func followHealNewExcursionCorrectsImmediately() {
