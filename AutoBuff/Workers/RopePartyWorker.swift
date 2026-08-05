@@ -12,6 +12,7 @@ final class RopePartyWorker: ObservableObject {
     private let windowSelector = WindowSelector()
     private var task: Task<Void, Never>?
     private var runID = UUID()
+    private var pendingCommands: [String] = []
     private(set) var isRunning = false
 
     func start(settings: AppSettings, windowID: CGWindowID) {
@@ -29,6 +30,7 @@ final class RopePartyWorker: ObservableObject {
         runID = UUID()
         task?.cancel()
         task = nil
+        pendingCommands = []
         Task { await human.releaseAll() }
     }
 
@@ -48,6 +50,35 @@ final class RopePartyWorker: ObservableObject {
                 log("已发送解散队伍指令：/退出隊伍")
             } catch {
                 onError?("解散队伍指令发送失败：\(error.localizedDescription)")
+            }
+            await human.releaseAll()
+            finishOneShot(runID: currentRunID)
+        }
+    }
+
+    func removeMember(roleName: String, windowID: CGWindowID) {
+        let command = "/踢出隊伍 \(roleName)"
+        if isRunning, task != nil {
+            pendingCommands.append(command)
+            log("移除成员指令已加入发送队列：\(roleName)")
+            return
+        }
+
+        stop()
+        let currentRunID = UUID()
+        runID = currentRunID
+        isRunning = true
+        task = Task {
+            log("收到网页移除队伍成员指令")
+            guard await ensureGameFocus(windowID: windowID) else {
+                finishOneShot(runID: currentRunID)
+                return
+            }
+            do {
+                try await sendChatCommand(command)
+                log("已发送移除成员指令：\(command)")
+            } catch {
+                onError?("移除成员指令发送失败：\(error.localizedDescription)")
             }
             await human.releaseAll()
             finishOneShot(runID: currentRunID)
@@ -78,6 +109,16 @@ final class RopePartyWorker: ObservableObject {
             guard windowSelector.isWindowValid(windowID: windowID) else {
                 onError?("游戏窗口已关闭或不可见")
                 break
+            }
+            if !pendingCommands.isEmpty {
+                let command = pendingCommands.removeFirst()
+                guard await ensureGameFocus(windowID: windowID) else { break }
+                do {
+                    try await sendChatCommand(command)
+                    log("已发送移除成员指令：\(command)")
+                } catch {
+                    onError?("移除成员指令发送失败：\(error.localizedDescription)")
+                }
             }
             await sleep(1)
         }

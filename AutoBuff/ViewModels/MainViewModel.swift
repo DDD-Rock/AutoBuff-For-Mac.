@@ -811,6 +811,19 @@ final class MainViewModel: ObservableObject {
                     return
                 }
                 ropePartyWorker.disbandParty(windowID: window.windowID)
+            case "remove_rope_party_member":
+                guard let roleName = command.targetRoleName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !roleName.isEmpty else {
+                    appendLog("收到的移除成员指令缺少角色名称")
+                    return
+                }
+                guard let window = selectedWindow,
+                      windowSelector.isWindowValid(windowID: window.windowID) else {
+                    appendLog("游戏窗口未识别，无法发送 /踢出隊伍 \(roleName)")
+                    return
+                }
+                appendLog("收到网页移除成员指令：\(roleName)")
+                ropePartyWorker.removeMember(roleName: roleName, windowID: window.windowID)
             default:
                 break
             }

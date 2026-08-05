@@ -253,6 +253,7 @@ struct RemoteClientCommand {
     let isLeader: Bool
     let firstCreation: Bool
     let roleName: String?
+    let targetRoleName: String?
     let inviteRoleNames: [String]
 }
 
@@ -261,6 +262,7 @@ private struct RemoteServerMessage: Decodable {
     let clientId: String?
     let name: String?
     let roleName: String?
+    let targetRoleName: String?
     let action: String?
     let reason: String?
     let teamId: Int64?
@@ -744,6 +746,7 @@ final class RemoteMonitorClient {
                     isLeader: decoded.isLeader ?? false,
                     firstCreation: decoded.firstCreation ?? false,
                     roleName: decoded.roleName,
+                    targetRoleName: decoded.targetRoleName,
                     inviteRoleNames: decoded.inviteRoleNames ?? []
                 )
             )
@@ -779,6 +782,7 @@ final class RemoteMonitorClient {
                         isLeader: false,
                         firstCreation: false,
                         roleName: nil,
+                        targetRoleName: nil,
                         inviteRoleNames: []
                     )
                 )
