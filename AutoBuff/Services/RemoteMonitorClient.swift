@@ -114,7 +114,7 @@ private struct RemoteUser: Codable {
     let username: String
     let nickname: String?
     let isSuperAdmin: Bool?
-	let authorizedModes: [String]?
+    let authorizedModes: [String]?
 }
 
 private struct RemoteAuthResponse: Decodable {
@@ -132,7 +132,7 @@ private struct RemoteClientBindResponse: Decodable {
     let clientId: String
     let name: String
     let roleName: String?
-	let authorizedModes: [String]?
+    let authorizedModes: [String]?
 }
 
 private struct RemoteRoleNameRequest: Encodable {
@@ -310,11 +310,11 @@ final class RemoteMonitorClient {
     private(set) var clientID: String?
     private(set) var clientName: String?
     private(set) var isSuperAdmin = false
-	private(set) var authorizedModes = AppMode.defaultAuthorized
+    private(set) var authorizedModes = AppMode.defaultAuthorized
     var onIdentity: ((String) -> Void)?
     var onRoleName: ((String) -> Void)?
     var onCommand: ((RemoteClientCommand) -> Void)?
-	var onAuthorizedModes: ((Set<AppMode>) -> Void)?
+    var onAuthorizedModes: ((Set<AppMode>) -> Void)?
     private var baseURL = ""
     private var socket: URLSessionWebSocketTask?
     private var publisherURL: URL?
@@ -358,7 +358,7 @@ final class RemoteMonitorClient {
         self.username = response.user.username
         self.nickname = response.user.nickname ?? "未设置昵称"
         isSuperAdmin = response.user.isSuperAdmin ?? false
-		applyAuthorizedModes(response.user.authorizedModes)
+        applyAuthorizedModes(response.user.authorizedModes)
         do {
             try await prepareLocalIdentity()
             try await bindCurrentClient()
@@ -372,7 +372,7 @@ final class RemoteMonitorClient {
             self.username = nil
             self.nickname = nil
             isSuperAdmin = false
-			authorizedModes = AppMode.defaultAuthorized
+            authorizedModes = AppMode.defaultAuthorized
             throw error
         }
     }
@@ -390,7 +390,7 @@ final class RemoteMonitorClient {
             username = user.username
             nickname = user.nickname ?? "未设置昵称"
             isSuperAdmin = user.isSuperAdmin ?? false
-			applyAuthorizedModes(user.authorizedModes)
+            applyAuthorizedModes(user.authorizedModes)
             try await prepareLocalIdentity()
             try await validateCurrentClient()
             return user.username
@@ -650,7 +650,7 @@ final class RemoteMonitorClient {
         username = nil
         nickname = nil
         isSuperAdmin = false
-		authorizedModes = AppMode.defaultAuthorized
+        authorizedModes = AppMode.defaultAuthorized
     }
 
     func listCloudMaps() async throws -> [CloudMapSummary] {
@@ -705,7 +705,7 @@ final class RemoteMonitorClient {
         clientName = response.name
         onIdentity?(response.name)
         if let roleName = response.roleName, !roleName.isEmpty { onRoleName?(roleName) }
-		applyAuthorizedModes(response.authorizedModes)
+        applyAuthorizedModes(response.authorizedModes)
         try await Task.detached(priority: .utility) {
             try RemoteMonitorLocalStore.shared.saveClientName(response.name)
         }.value
@@ -747,17 +747,17 @@ final class RemoteMonitorClient {
             clientName = authorization.name
             onIdentity?(authorization.name)
             if let roleName = authorization.roleName, !roleName.isEmpty { onRoleName?(roleName) }
-			applyAuthorizedModes(authorization.authorizedModes)
+            applyAuthorizedModes(authorization.authorizedModes)
         }
     }
 
-	private func applyAuthorizedModes(_ rawModes: [String]?) {
-		let parsed = Set((rawModes ?? []).compactMap(AppMode.init(rawValue:)))
-		authorizedModes = isSuperAdmin
-			? Set(AppMode.allCases)
-			: (rawModes == nil ? AppMode.defaultAuthorized : parsed)
-		onAuthorizedModes?(authorizedModes)
-	}
+    private func applyAuthorizedModes(_ rawModes: [String]?) {
+        let parsed = Set((rawModes ?? []).compactMap(AppMode.init(rawValue:)))
+        authorizedModes = isSuperAdmin
+            ? Set(AppMode.allCases)
+            : (rawModes == nil ? AppMode.defaultAuthorized : parsed)
+        onAuthorizedModes?(authorizedModes)
+    }
 
     private func handleServerMessage(_ message: URLSessionWebSocketTask.Message) {
         let data: Data

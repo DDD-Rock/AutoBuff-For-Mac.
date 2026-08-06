@@ -202,8 +202,9 @@ final class LoungeWorker: ObservableObject {
             try await sendChatMessage("/隊伍")
             await randomSleep(0.35...0.8)
             let announcement = nextAnnouncement()
-            try await sendChatMessage(announcement)
-            log("已发送：\(announcement)")
+            let clockTime = currentClockTime()
+            try await sendChatMessage(announcement, suffix: clockTime)
+            log("已发送：\(announcement) \(clockTime)")
         } catch {
             onError?("发送 BUFF 完成消息失败：\(error.localizedDescription)")
         }
@@ -231,9 +232,15 @@ final class LoungeWorker: ObservableObject {
         return base + punctuation
     }
 
+    private func currentClockTime() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: Date())
+    }
+
     /// 每条消息都重新打开聊天框。字符本身由 HumanInput 使用 50～120ms
     /// 的随机间隔输入，这里再为打开聊天和发送前留出短暂停顿。
-    private func sendChatMessage(_ message: String) async throws {
+    private func sendChatMessage(_ message: String, suffix: String? = nil) async throws {
         guard isRunning, !Task.isCancelled else { return }
         try await human.pressNamedKey("Enter")
         await randomSleep(0.18...0.42)
@@ -241,6 +248,13 @@ final class LoungeWorker: ObservableObject {
         await human.typeText(message)
         await randomSleep(0.12...0.32)
         guard isRunning, !Task.isCancelled else { return }
+        if let suffix {
+            try await human.pressNamedKey("Space")
+            await randomSleep(0.08...0.18)
+            await human.typeText(suffix)
+            await randomSleep(0.12...0.32)
+            guard isRunning, !Task.isCancelled else { return }
+        }
         try await human.pressNamedKey("Enter")
     }
 

@@ -353,6 +353,7 @@ final class SettingsManager {
     private func normalize(_ settings: AppSettings) -> AppSettings {
         var copy = settings
         copy.schemaVersion = AppSettings.currentSchemaVersion
+        copy.monitorServerBaseURL = AppSettings.normalizedMonitorServerBaseURL(copy.monitorServerBaseURL)
         copy.returnToMarket = copy.mode == .deadFlower
         copy.loungeMoveMinMinutes = max(1, min(24 * 60, copy.loungeMoveMinMinutes))
         copy.loungeMoveMaxMinutes = max(1, min(24 * 60, copy.loungeMoveMaxMinutes))

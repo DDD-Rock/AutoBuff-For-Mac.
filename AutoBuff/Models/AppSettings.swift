@@ -78,7 +78,8 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 8
+    static let currentSchemaVersion = 9
+    static let defaultMonitorServerBaseURL = "https://buff.juanwang.cc"
 
     var schemaVersion: Int = currentSchemaVersion
     var mode: AppMode = .deadFlower
@@ -112,7 +113,7 @@ struct AppSettings: Codable, Equatable {
     var portalWidthThreshold: Double = 2.5
     var mapTopologies: [MapTopology] = []
     var monitorDisplayMode: MonitorDisplayMode = .minimapWithAnnotations
-    var monitorServerBaseURL: String = "http://106.52.208.129:28671"
+    var monitorServerBaseURL: String = defaultMonitorServerBaseURL
     var monitorAccountUsername: String = ""
     var monitorAccountNickname: String = ""
     var monitorSafeZone: MonitorSafeZone? = nil
@@ -227,10 +228,10 @@ extension AppSettings {
             MonitorDisplayMode.self,
             forKey: .monitorDisplayMode
         ) ?? .minimapWithAnnotations
-        self.monitorServerBaseURL = try container.decodeIfPresent(
+        self.monitorServerBaseURL = Self.normalizedMonitorServerBaseURL(try container.decodeIfPresent(
             String.self,
             forKey: .monitorServerBaseURL
-        ) ?? "http://106.52.208.129:28671"
+        ))
         self.monitorAccountUsername = try container.decodeIfPresent(
             String.self,
             forKey: .monitorAccountUsername
@@ -244,6 +245,17 @@ extension AppSettings {
             forKey: .monitorSafeZone
         )
         self.buffs = try container.decodeIfPresent([BuffConfig].self, forKey: .buffs) ?? AppSettings.default.buffs
+    }
+
+    static func normalizedMonitorServerBaseURL(_ value: String?) -> String {
+        let normalized = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        switch normalized {
+        case "", "http://106.52.208.129:28671", "https://106.52.208.129:28671", "http://buff.juanwang.cc":
+            return defaultMonitorServerBaseURL
+        default:
+            return normalized
+        }
     }
 
     func encode(to encoder: Encoder) throws {
