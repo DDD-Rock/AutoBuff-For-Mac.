@@ -898,6 +898,7 @@ final class MainViewModel: ObservableObject {
         }
 
         ropePartyWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
+        ropePartyWorker.onCountdown = { [weak self] info in self?.countdowns = info }
         ropePartyWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
         ropePartyWorker.onTeamCreated = { [weak self] in
             guard let self, let teamID = settings.ropePartyTeamID else { return }
@@ -958,6 +959,7 @@ final class MainViewModel: ObservableObject {
         }
         ropePartyWorker.onStopped = { [weak self] in
             self?.isRunning = false
+            self?.countdowns = [:]
             self?.publishRemoteClientState()
         }
 

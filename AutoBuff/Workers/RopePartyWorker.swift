@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 final class RopePartyWorker: ObservableObject {
     var onLog: ((String) -> Void)?
+    var onCountdown: (([Int: Int]) -> Void)?
     var onError: ((String) -> Void)?
     var onStopped: (() -> Void)?
     var onTeamCreated: (() -> Void)?
@@ -18,6 +19,7 @@ final class RopePartyWorker: ObservableObject {
     private let human = HumanInput()
     private let windowSelector = WindowSelector()
     private let minimap = MinimapMonitor()
+    private let countdownPublisher = CountdownPublisher()
     private var task: Task<Void, Never>?
     private var runID = UUID()
     private var pendingCommands: [String] = []
@@ -31,6 +33,7 @@ final class RopePartyWorker: ObservableObject {
     private var bossOrangeCandidateFrames = 0
     private var bossMinimapReady = false
     private var nextBossInviteAt: TimeInterval = 0
+    private var pendingBossInviteStart: (cycleID: Int64, roleName: String)?
     private var pendingBossBuffCycleID: Int64?
     private var pendingBossKick: (cycleID: Int64, roleName: String)?
     private(set) var isRunning = false
@@ -44,6 +47,10 @@ final class RopePartyWorker: ObservableObject {
         let now = Date().timeIntervalSince1970
         buffDeadlines = Dictionary(uniqueKeysWithValues: configuredBuffs.map { ($0.id, now + $0.duration) })
         nextBuffDueReportAt = 0
+        countdownPublisher.start { [weak self] info in
+            self?.onCountdown?(info)
+        }
+        countdownPublisher.replaceDeadlines(buffDeadlines, now: now)
         minimap.setWindow(windowID)
         task = Task {
             await run(
@@ -62,8 +69,10 @@ final class RopePartyWorker: ObservableObject {
         task = nil
         pendingCommands = []
         activeBossCycleID = nil
+        pendingBossInviteStart = nil
         pendingBossBuffCycleID = nil
         pendingBossKick = nil
+        countdownPublisher.stop()
         Task { await human.releaseAll() }
     }
 
@@ -111,6 +120,14 @@ final class RopePartyWorker: ObservableObject {
 
     func startBossInviteCycle(cycleID: Int64, roleName: String) {
         guard isRunning, cycleID > 0, !roleName.isEmpty else { return }
+        if activeBossCycleID == cycleID || pendingBossInviteStart?.cycleID == cycleID {
+            return
+        }
+        pendingBossInviteStart = (cycleID, roleName)
+        log("老板邀请周期已加入执行队列：\(roleName)")
+    }
+
+    private func applyBossInviteStart(cycleID: Int64, roleName: String) {
         activeBossCycleID = cycleID
         bossRoleName = roleName
         bossOrangeBaseline = nil
@@ -163,6 +180,10 @@ final class RopePartyWorker: ObservableObject {
                 onError?("游戏窗口已关闭或不可见")
                 break
             }
+            if let start = pendingBossInviteStart {
+                pendingBossInviteStart = nil
+                applyBossInviteStart(cycleID: start.cycleID, roleName: start.roleName)
+            }
             if let cycleID = pendingBossBuffCycleID {
                 pendingBossBuffCycleID = nil
                 if await castAllConfiguredBuffs(windowID: windowID) {
@@ -189,6 +210,7 @@ final class RopePartyWorker: ObservableObject {
         guard runID == currentRunID else { return }
         isRunning = false
         task = nil
+        countdownPublisher.stop()
         log("神殿模式 · 挂绳组队已停止")
         onStopped?()
     }
@@ -260,6 +282,10 @@ final class RopePartyWorker: ObservableObject {
 
     private func reportBuffDueIfNeeded() {
         guard !configuredBuffs.isEmpty else { return }
+        guard pendingBossInviteStart == nil,
+              activeBossCycleID == nil,
+              pendingBossBuffCycleID == nil,
+              pendingBossKick == nil else { return }
         let now = Date().timeIntervalSince1970
         let minimumRemaining = configuredBuffs.compactMap { buff in
             buffDeadlines[buff.id].map { $0 - now }
@@ -289,6 +315,7 @@ final class RopePartyWorker: ObservableObject {
         }
         let now = Date().timeIntervalSince1970
         buffDeadlines = Dictionary(uniqueKeysWithValues: configuredBuffs.map { ($0.id, now + $0.duration) })
+        countdownPublisher.replaceDeadlines(buffDeadlines, now: now)
         nextBuffDueReportAt = 0
         return true
     }
