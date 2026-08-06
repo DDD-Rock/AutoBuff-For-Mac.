@@ -196,14 +196,14 @@ final class RopePartyWorker: ObservableObject {
     private func createPartyAndInvite(roleNames: [String], windowID: CGWindowID) async {
         log("首次创建队伍，开始发送建队指令")
         var commands = ["/退出隊伍", "/建立隊伍"]
-        commands.append(contentsOf: roleNames.map { "/邀请组队 \($0)" })
+        commands.append(contentsOf: roleNames.map { "/邀請組隊 \($0)" })
         for (index, command) in commands.enumerated() where isRunning && !Task.isCancelled {
             guard await sendChatCommand(command, windowID: windowID) else { return }
             log("已发送队伍指令：\(command)")
             if command == "/建立隊伍" {
                 onTeamCreated?()
-            } else if command.hasPrefix("/邀请组队 ") {
-                let roleName = String(command.dropFirst("/邀请组队 ".count))
+            } else if command.hasPrefix("/邀請組隊 ") {
+                let roleName = String(command.dropFirst("/邀請組隊 ".count))
                 onInvitationSent?(roleName)
             }
             if index < commands.count - 1 {

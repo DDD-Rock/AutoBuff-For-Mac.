@@ -199,7 +199,7 @@ final class LoungeWorker: ObservableObject {
         guard isRunning, !Task.isCancelled else { return }
         do {
             await randomSleep(0.25...0.6)
-            try await sendChatMessage("/队伍")
+            try await sendChatMessage("/隊伍")
             await randomSleep(0.35...0.8)
             let announcement = nextAnnouncement()
             try await sendChatMessage(announcement)
