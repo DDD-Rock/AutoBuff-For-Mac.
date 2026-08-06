@@ -41,16 +41,11 @@ final class RopePartyWorker: ObservableObject {
         isRunning = true
         task = Task {
             log("收到网页解散队伍指令")
-            guard await ensureGameFocus(windowID: windowID) else {
+            guard await sendChatCommand("/退出隊伍", windowID: windowID) else {
                 finishOneShot(runID: currentRunID)
                 return
             }
-            do {
-                try await sendChatCommand("/退出隊伍")
-                log("已发送解散队伍指令：/退出隊伍")
-            } catch {
-                onError?("解散队伍指令发送失败：\(error.localizedDescription)")
-            }
+            log("已发送解散队伍指令：/退出隊伍")
             await human.releaseAll()
             finishOneShot(runID: currentRunID)
         }
@@ -70,16 +65,11 @@ final class RopePartyWorker: ObservableObject {
         isRunning = true
         task = Task {
             log("收到网页移除队伍成员指令")
-            guard await ensureGameFocus(windowID: windowID) else {
+            guard await sendChatCommand(command, windowID: windowID) else {
                 finishOneShot(runID: currentRunID)
                 return
             }
-            do {
-                try await sendChatCommand(command)
-                log("已发送移除成员指令：\(command)")
-            } catch {
-                onError?("移除成员指令发送失败：\(error.localizedDescription)")
-            }
+            log("已发送移除成员指令：\(command)")
             await human.releaseAll()
             finishOneShot(runID: currentRunID)
         }
@@ -112,13 +102,8 @@ final class RopePartyWorker: ObservableObject {
             }
             if !pendingCommands.isEmpty {
                 let command = pendingCommands.removeFirst()
-                guard await ensureGameFocus(windowID: windowID) else { break }
-                do {
-                    try await sendChatCommand(command)
-                    log("已发送移除成员指令：\(command)")
-                } catch {
-                    onError?("移除成员指令发送失败：\(error.localizedDescription)")
-                }
+                guard await sendChatCommand(command, windowID: windowID) else { break }
+                log("已发送移除成员指令：\(command)")
             }
             await sleep(1)
         }
@@ -131,18 +116,12 @@ final class RopePartyWorker: ObservableObject {
     }
 
     private func createPartyAndInvite(roleNames: [String], windowID: CGWindowID) async {
-        guard await ensureGameFocus(windowID: windowID) else { return }
         log("首次创建队伍，开始发送建队指令")
         var commands = ["/退出队伍", "/建立队伍"]
         commands.append(contentsOf: roleNames.map { "/邀请组队 \($0)" })
         for (index, command) in commands.enumerated() where isRunning && !Task.isCancelled {
-            do {
-                try await sendChatCommand(command)
-                log("已发送队伍指令：\(command)")
-            } catch {
-                onError?("队伍指令发送失败：\(error.localizedDescription)")
-                return
-            }
+            guard await sendChatCommand(command, windowID: windowID) else { return }
+            log("已发送队伍指令：\(command)")
             if index < commands.count - 1 {
                 await randomSleep(0.55...1.15)
             }
@@ -150,14 +129,28 @@ final class RopePartyWorker: ObservableObject {
         log("首次建队指令已发送完毕")
     }
 
-    private func sendChatCommand(_ command: String) async throws {
-        try await human.pressNamedKey("Enter")
+    private func sendChatCommand(_ command: String, windowID: CGWindowID) async -> Bool {
+        guard await ensureGameFocus(windowID: windowID) else { return false }
+        do {
+            try await human.pressNamedKey("Enter")
+        } catch {
+            onError?("激活聊天窗口失败：\(error.localizedDescription)")
+            return false
+        }
         await randomSleep(0.18...0.42)
-        guard isRunning, !Task.isCancelled else { return }
+        guard isRunning, !Task.isCancelled else { return false }
+        guard await ensureGameFocus(windowID: windowID) else { return false }
         await human.typeText(command)
         await randomSleep(0.12...0.32)
-        guard isRunning, !Task.isCancelled else { return }
-        try await human.pressNamedKey("Enter")
+        guard isRunning, !Task.isCancelled else { return false }
+        guard await ensureGameFocus(windowID: windowID) else { return false }
+        do {
+            try await human.pressNamedKey("Enter")
+            return true
+        } catch {
+            onError?("发送聊天指令失败：\(error.localizedDescription)")
+            return false
+        }
     }
 
     private func ensureGameFocus(windowID: CGWindowID) async -> Bool {
