@@ -4,7 +4,7 @@ enum AppConstants {
     static let appName = "AutoBuff"
     static let appVersion = Bundle.main.object(
         forInfoDictionaryKey: "CFBundleShortVersionString"
-    ) as? String ?? "2.0.2"
+    ) as? String ?? "2.0.3"
 
     static let defaultInterval: Double = 5.0
     static let defaultRandomDelay: Double = 2.0
