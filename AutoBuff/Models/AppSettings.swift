@@ -8,6 +8,8 @@ enum AppMode: String, Codable, CaseIterable {
     case followHeal = "follow_heal"
     case monitor
 
+    static let defaultAuthorized: Set<AppMode> = [.deadFlower, .liveFlower, .temple]
+
     var title: String {
         switch self {
         case .deadFlower: return "死花模式"
@@ -70,7 +72,7 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
         switch self {
         case .rightLeft: return "先右再左"
         case .leftOnly: return "只向左（鱼窝）"
-        case .rightOnly: return "只向右（骨龙）"
+        case .rightOnly: return "只向右（骨龙、忘却）"
         }
     }
 }

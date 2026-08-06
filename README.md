@@ -2,7 +2,7 @@
 
 YzY - Auto Buff 是 `open-flower` 的 macOS 原生移植版，用于在 MapleStory Worlds-Artale 中按配置循环释放 Buff。
 
-当前版本：**2.0.4**
+当前版本：**2.1.1**
 
 ## 当前状态
 
@@ -152,7 +152,7 @@ DerivedData 中的多个 AutoBuff 同时运行并争用 TCC 权限。
 
 - 先右再左
 - 只向左（鱼窝）
-- 只向右（骨龙）
+- 只向右（骨龙、忘却）
 
 ### 神殿模式
 

@@ -64,6 +64,7 @@ final class MainViewModel: ObservableObject {
     @Published var monitorZoneOutside = false
     @Published var remoteMonitorAuthenticated = false
     @Published var remoteMonitorIsSuperAdmin = false
+	@Published var authorizedModes = AppMode.defaultAuthorized
     @Published var remoteMonitorAuthStatus = "未登录远程监控账号"
     @Published var remoteClientName = "正在分配客户端名称"
     @Published var remoteMonitorLinkCopied = false
@@ -177,6 +178,7 @@ final class MainViewModel: ObservableObject {
 
     func setMode(_ newMode: AppMode) {
         guard !isRunning else { return }
+		guard remoteMonitorIsSuperAdmin || authorizedModes.contains(newMode) else { return }
         mode = newMode
         settings.mode = newMode
         settings.returnToMarket = newMode == .deadFlower
@@ -617,6 +619,7 @@ final class MainViewModel: ObservableObject {
         remoteMonitorClient.logout()
         remoteMonitorAuthenticated = false
         remoteMonitorIsSuperAdmin = false
+		authorizedModes = AppMode.defaultAuthorized
         remoteMonitorAuthStatus = message
         NotificationCenter.default.post(
             name: .autoBuffAccountDidLogout,
@@ -726,6 +729,8 @@ final class MainViewModel: ObservableObject {
             settings.monitorAccountNickname = remoteMonitorClient.nickname ?? "未设置昵称"
             remoteMonitorAuthenticated = true
             remoteMonitorIsSuperAdmin = remoteMonitorClient.isSuperAdmin
+			authorizedModes = remoteMonitorClient.authorizedModes
+			normalizeAuthorizedMode()
             try remoteMonitorClient.connectPublisher()
             publishRemoteClientState()
             remoteMonitorAuthStatus = "已登录 · 客户端管理通道已连接"
@@ -770,6 +775,8 @@ final class MainViewModel: ObservableObject {
                 if isRunning {
                     if command.reason == "monitor_conflict" {
                         appendLog("同一账号已有另一个客户端在运行监控模式，本机已自动停止")
+					} else if command.reason == "mode_unauthorized" {
+						appendLog("当前模式授权已被收回，本机已自动停止")
                     } else {
                         appendLog("收到网页远程停止指令")
                     }
@@ -779,6 +786,10 @@ final class MainViewModel: ObservableObject {
                 appendLog("当前客户端已解绑，正在停止功能并退出登录")
                 logoutRemoteMonitor(message: command.reason ?? "当前客户端已解绑，请重新登录")
                 return
+			case "kick":
+				appendLog("管理员已将当前客户端踢下线")
+				logoutRemoteMonitor(message: command.reason ?? "管理员已将当前客户端踢下线")
+				return
             case "configure_rope_party":
                 guard let teamID = command.teamId else {
                     appendLog("收到的挂绳组队配置缺少队伍编号")
@@ -870,7 +881,20 @@ final class MainViewModel: ObservableObject {
             }
             publishRemoteClientState()
         }
+		remoteMonitorClient.onAuthorizedModes = { [weak self] modes in
+			guard let self else { return }
+			authorizedModes = modes
+			normalizeAuthorizedMode()
+		}
     }
+
+	private func normalizeAuthorizedMode() {
+		guard !remoteMonitorIsSuperAdmin, !authorizedModes.contains(mode) else { return }
+		if isRunning { stopWorker() }
+		mode = AppMode.allCases.first(where: authorizedModes.contains) ?? .deadFlower
+		settings.mode = mode
+		saveSettings()
+	}
 
     private func publishRemoteClientState() {
         guard remoteMonitorAuthenticated else { return }

@@ -459,31 +459,41 @@ struct ContentView: View {
 
     private var modeSelector: some View {
         VStack(spacing: 5) {
+			if viewModel.remoteMonitorIsSuperAdmin || viewModel.authorizedModes.contains(.deadFlower) {
             modeButton(
                 .deadFlower,
                 icon: "arrow.uturn.backward.circle.fill",
                 subtitle: "释放后进入自由市场"
             )
+			}
+			if viewModel.remoteMonitorIsSuperAdmin || viewModel.authorizedModes.contains(.liveFlower) {
             modeButton(
                 .liveFlower,
                 icon: "repeat.circle.fill",
                 subtitle: "在当前地图循环释放"
             )
+			}
+			if viewModel.remoteMonitorIsSuperAdmin || viewModel.authorizedModes.contains(.temple) {
             modeButton(
                 .temple,
                 icon: "building.columns.fill",
                 subtitle: "适配时间神殿地图"
             )
+			}
+			if viewModel.remoteMonitorIsSuperAdmin || viewModel.authorizedModes.contains(.followHeal) {
             modeButton(
                 .followHeal,
                 icon: "heart.circle.fill",
                 subtitle: "自动补血并回位"
             )
+			}
+			if viewModel.remoteMonitorIsSuperAdmin || viewModel.authorizedModes.contains(.monitor) {
             modeButton(
                 .monitor,
                 icon: "map.circle.fill",
                 subtitle: "只读显示实时地图"
             )
+			}
         }
     }
 

@@ -77,7 +77,8 @@ struct MapTopologyLibraryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("地图标注").font(.title2.bold())
-            GroupBox("第一步：根据当前小地图新建") {
+            if cloudAccess {
+                GroupBox("第一步：根据当前小地图新建") {
                 HStack(spacing: 16) {
                     minimapPreview
                     VStack(alignment: .leading, spacing: 9) {
@@ -112,7 +113,7 @@ struct MapTopologyLibraryView: View {
                 .padding(8)
             }
 
-            GroupBox("第二步：选择已创建地图并修改") {
+                GroupBox("第二步：选择已创建地图并修改") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("地图库共 \(maps.count) 张")
@@ -208,6 +209,22 @@ struct MapTopologyLibraryView: View {
                     }
                 }
                 .padding(8)
+                }
+            } else {
+                GroupBox("云端地图") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("普通用户仅可从云端下载地图标注。")
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.textSecondary)
+                        Button("云端下载", systemImage: "icloud.and.arrow.down") {
+                            showsCloudLibrary = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(cloudBusy)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
             }
             Spacer()
             HStack {
@@ -218,6 +235,7 @@ struct MapTopologyLibraryView: View {
         .padding(18)
         .frame(minWidth: 760, minHeight: 500)
         .task(id: cleanCaptureRequestID) {
+            guard cloudAccess else { return }
             await captureCleanCurrentMap(requestID: cleanCaptureRequestID)
         }
         .sheet(item: $editingMap) { selected in
@@ -342,7 +360,7 @@ struct MapTopologyLibraryView: View {
     }
 
     private func createMap() {
-        guard canCreate, let buffer = currentBuffer else { return }
+        guard cloudAccess, canCreate, let buffer = currentBuffer else { return }
         let map = MapTopology(
             mapName: trimmedName,
             referenceWidth: buffer.width,
