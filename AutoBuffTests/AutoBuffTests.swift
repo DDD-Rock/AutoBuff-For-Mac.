@@ -897,6 +897,19 @@ struct SettingsManagerTests {
         #expect(FollowHealNavigation.protectiveAnchorTolerance(10) == 7.5)
     }
 
+    @Test func followHealNearAnchorExcursionUsesHalfBoundary() {
+        #expect(FollowHealNavigation.isNearAnchor(currentX: 101.9, baseX: 100, tolerance: 4))
+        #expect(FollowHealNavigation.isNearAnchor(currentX: 102, baseX: 100, tolerance: 4))
+        #expect(!FollowHealNavigation.isNearAnchor(currentX: 102.1, baseX: 100, tolerance: 4))
+    }
+
+    @Test func followHealNearAnchorExcursionPointsAwayThenBack() {
+        #expect(FollowHealNavigation.outwardTeleportDirection(currentX: 99, baseX: 100) == .left)
+        #expect(FollowHealNavigation.outwardTeleportDirection(currentX: 101, baseX: 100) == .right)
+        #expect(FollowHealNavigation.oppositeDirection(.left) == .right)
+        #expect(FollowHealNavigation.oppositeDirection(.right) == .left)
+    }
+
     @Test func followHealLeftProtectiveBoundaryForcesImmediateRecovery() {
         #expect(FollowHealNavigation.requiresImmediateLeftRecovery(
             currentX: 93.9,

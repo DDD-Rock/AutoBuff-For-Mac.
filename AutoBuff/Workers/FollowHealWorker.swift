@@ -8,6 +8,7 @@ enum FollowHealNavigation {
     static let healGapRange: ClosedRange<TimeInterval> = 0.25...0.60
     static let newCollisionDistance: CGFloat = 1
     static let protectiveBoundaryRatio: CGFloat = 0.75
+    static let nearAnchorExcursionRatio: CGFloat = 0.5
 
     struct TeleportExcursionGuard {
         private(set) var lastTeleportDirection: HumanInput.Direction?
@@ -111,6 +112,27 @@ enum FollowHealNavigation {
 
     static func protectiveAnchorTolerance(_ boundaryTolerance: CGFloat) -> CGFloat {
         max(0.5, boundaryTolerance * protectiveBoundaryRatio)
+    }
+
+    static func isNearAnchor(
+        currentX: CGFloat,
+        baseX: CGFloat,
+        tolerance: CGFloat
+    ) -> Bool {
+        abs(currentX - baseX) <= max(0, tolerance) * nearAnchorExcursionRatio
+    }
+
+    static func outwardTeleportDirection(
+        currentX: CGFloat,
+        baseX: CGFloat
+    ) -> HumanInput.Direction {
+        if currentX < baseX { return .left }
+        if currentX > baseX { return .right }
+        return Bool.random() ? .left : .right
+    }
+
+    static func oppositeDirection(_ direction: HumanInput.Direction) -> HumanInput.Direction {
+        direction == .left ? .right : .left
     }
 
     static func requiresImmediateLeftRecovery(
@@ -269,6 +291,7 @@ final class FollowHealWorker: ObservableObject {
                     teleportKey: settings.teleportSkillKey,
                     baseX: baseX,
                     boundaryTolerance: protectiveTolerance,
+                    nearAnchorTolerance: boundaryTolerance,
                     buffs: buffs,
                     nextCast: &nextCast,
                     nextCenterAdjustAt: &nextCenterAdjustAt,
@@ -288,6 +311,7 @@ final class FollowHealWorker: ObservableObject {
                 teleportKey: settings.teleportSkillKey,
                 baseX: baseX,
                 boundaryTolerance: protectiveTolerance,
+                nearAnchorTolerance: boundaryTolerance,
                 buffs: buffs,
                 nextCast: &nextCast,
                 nextCenterAdjustAt: &nextCenterAdjustAt,
@@ -304,6 +328,7 @@ final class FollowHealWorker: ObservableObject {
         teleportKey: String,
         baseX: CGFloat,
         boundaryTolerance: CGFloat,
+        nearAnchorTolerance: CGFloat,
         buffs: [BuffConfig],
         nextCast: inout [Int: TimeInterval],
         nextCenterAdjustAt: inout TimeInterval,
@@ -350,7 +375,23 @@ final class FollowHealWorker: ObservableObject {
                     priorityLeftRecoveryTolerance: boundaryTolerance
                 )
                 let isScheduledAdjustment = now >= nextCenterAdjustAt
-                if isNewExcursion || isScheduledAdjustment {
+                let shouldPerformNearAnchorExcursion = !isNewExcursion
+                    && isScheduledAdjustment
+                    && FollowHealNavigation.isNearAnchor(
+                        currentX: player.x,
+                        baseX: baseX,
+                        tolerance: nearAnchorTolerance
+                    )
+                if shouldPerformNearAnchorExcursion {
+                    if let returnDirection = await performNearAnchorExcursion(
+                        currentX: player.x,
+                        baseX: baseX,
+                        teleportKey: teleportKey,
+                        leftRecoveryTolerance: boundaryTolerance
+                    ) {
+                        excursionGuard.recordTeleport(direction: returnDirection)
+                    }
+                } else if isNewExcursion || isScheduledAdjustment {
                     if let direction = FollowHealNavigation.teleportDirectionToBase(
                         currentX: player.x,
                         baseX: baseX
@@ -367,12 +408,12 @@ final class FollowHealWorker: ObservableObject {
                             excursionGuard.recordTeleport(direction: direction)
                         }
                     }
-                    nextCenterAdjustAt = FollowHealNavigation.updatedCenterAdjustDeadline(
-                        currentDeadline: nextCenterAdjustAt,
-                        now: now,
-                        scheduledTriggered: isScheduledAdjustment
-                    )
                 }
+                nextCenterAdjustAt = FollowHealNavigation.updatedCenterAdjustDeadline(
+                    currentDeadline: nextCenterAdjustAt,
+                    now: now,
+                    scheduledTriggered: isScheduledAdjustment
+                )
             } else if minimap.minimapSize != nil {
                 missingPlayerCount += 1
                 if missingPlayerCount == 1 || missingPlayerCount % 8 == 0 {
@@ -393,7 +434,8 @@ final class FollowHealWorker: ObservableObject {
         currentX: CGFloat,
         baseX: CGFloat,
         urgent: Bool,
-        leftRecoveryTolerance: CGFloat
+        leftRecoveryTolerance: CGFloat,
+        settleRange: ClosedRange<Double>? = nil
     ) async -> Bool {
         log(
             "\(urgent ? "快速回位" : "跟补修正")：当前X=\(format(currentX))，"
@@ -413,7 +455,7 @@ final class FollowHealWorker: ObservableObject {
                     leftRecoveryTolerance: leftRecoveryTolerance
                 )
             } else {
-                await randomSleep(0.50...0.80)
+                await randomSleep(settleRange ?? (0.50...0.80))
             }
             return true
         } catch is CancellationError {
@@ -422,6 +464,39 @@ final class FollowHealWorker: ObservableObject {
             onError?("瞬移键错误: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func performNearAnchorExcursion(
+        currentX: CGFloat,
+        baseX: CGFloat,
+        teleportKey: String,
+        leftRecoveryTolerance: CGFloat
+    ) async -> HumanInput.Direction? {
+        let outward = FollowHealNavigation.outwardTeleportDirection(
+            currentX: currentX,
+            baseX: baseX
+        )
+        let returnDirection = FollowHealNavigation.oppositeDirection(outward)
+        log("近点拟人往返：先向\(outward == .left ? "左" : "右")侧瞬移，再短暂间隔后回位")
+        guard await teleportTowardBase(
+            direction: outward,
+            teleportKey: teleportKey,
+            currentX: currentX,
+            baseX: baseX,
+            urgent: false,
+            leftRecoveryTolerance: leftRecoveryTolerance,
+            settleRange: 0.12...0.24
+        ) else { return nil }
+        guard await teleportTowardBase(
+            direction: returnDirection,
+            teleportKey: teleportKey,
+            currentX: currentX,
+            baseX: baseX,
+            urgent: false,
+            leftRecoveryTolerance: leftRecoveryTolerance,
+            settleRange: 0.15...0.28
+        ) else { return nil }
+        return returnDirection
     }
 
     private func waitForPlayerMarkerStability(
