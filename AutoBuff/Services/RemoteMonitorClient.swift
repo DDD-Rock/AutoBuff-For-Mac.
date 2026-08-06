@@ -246,6 +246,13 @@ private struct RemoteTeamJoinedPayload: Encodable {
     let roleName: String
 }
 
+private struct RemoteRopePartyProgressPayload: Encodable {
+    let teamId: Int64
+    let cycleId: Int64?
+    let event: String
+    let roleName: String?
+}
+
 struct RemoteClientCommand {
     let action: String
     let reason: String?
@@ -254,6 +261,7 @@ struct RemoteClientCommand {
     let firstCreation: Bool
     let roleName: String?
     let targetRoleName: String?
+    let cycleId: Int64?
     let inviteRoleNames: [String]
 }
 
@@ -263,6 +271,7 @@ private struct RemoteServerMessage: Decodable {
     let name: String?
     let roleName: String?
     let targetRoleName: String?
+    let cycleId: Int64?
     let action: String?
     let reason: String?
     let teamId: Int64?
@@ -448,6 +457,24 @@ final class RemoteMonitorClient {
         send(
             type: "team_joined",
             payload: RemoteTeamJoinedPayload(teamId: teamID, roleName: roleName)
+        )
+    }
+
+    func publishRopePartyProgress(
+        teamID: Int64,
+        cycleID: Int64? = nil,
+        event: String,
+        roleName: String? = nil
+    ) {
+        guard socket != nil else { return }
+        send(
+            type: "rope_party_progress",
+            payload: RemoteRopePartyProgressPayload(
+                teamId: teamID,
+                cycleId: cycleID,
+                event: event,
+                roleName: roleName
+            )
         )
     }
 
@@ -747,6 +774,7 @@ final class RemoteMonitorClient {
                     firstCreation: decoded.firstCreation ?? false,
                     roleName: decoded.roleName,
                     targetRoleName: decoded.targetRoleName,
+                    cycleId: decoded.cycleId,
                     inviteRoleNames: decoded.inviteRoleNames ?? []
                 )
             )
@@ -783,6 +811,7 @@ final class RemoteMonitorClient {
                         firstCreation: false,
                         roleName: nil,
                         targetRoleName: nil,
+                        cycleId: nil,
                         inviteRoleNames: []
                     )
                 )

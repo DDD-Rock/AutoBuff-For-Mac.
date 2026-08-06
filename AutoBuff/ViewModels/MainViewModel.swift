@@ -33,6 +33,7 @@ final class MainViewModel: ObservableObject {
     @Published var logs: [String] = []
     @Published var countdowns: [Int: Int] = [:]
     @Published var isRunning = false
+    private var ropePartyFirstCreation = false
     @Published var accessibilityGranted = false
     @Published var accessibilityUsesAdHocSignature = false
     @Published var screenRecordingGranted = false
@@ -301,7 +302,12 @@ final class MainViewModel: ObservableObject {
                 appendLog("神殿模式 · 休息室已启动")
             case .ropeParty:
                 let launchSettings = settings
-                ropePartyWorker.start(settings: launchSettings, windowID: window.windowID)
+                ropePartyWorker.start(
+                    settings: launchSettings,
+                    windowID: window.windowID,
+                    firstCreation: ropePartyFirstCreation
+                )
+                ropePartyFirstCreation = false
                 if !settings.ropePartyInviteRoleNames.isEmpty {
                     settings.ropePartyInviteRoleNames = []
                     saveSettings()
@@ -790,6 +796,7 @@ final class MainViewModel: ObservableObject {
                 }
                 settings.ropePartyTeamID = teamID
                 settings.ropePartyIsLeader = command.isLeader
+                ropePartyFirstCreation = command.firstCreation
                 settings.ropePartyInviteRoleNames = command.firstCreation
                     ? command.inviteRoleNames
                     : []
@@ -798,11 +805,16 @@ final class MainViewModel: ObservableObject {
                 appendLog("已切换为神殿模式 · 挂绳组队，并开启自动同意组队")
                 startWorker()
             case "disband_rope_party":
+                guard let teamID = command.teamId else {
+                    appendLog("收到的解散队伍指令缺少队伍编号")
+                    return
+                }
                 appendLog("收到网页解散队伍指令，正在停止当前模式")
                 stopWorker(resumePartyInvite: false)
                 settings.autoAcceptPartyInviteEnabled = false
                 settings.ropePartyTeamID = nil
                 settings.ropePartyIsLeader = false
+                ropePartyFirstCreation = false
                 settings.ropePartyInviteRoleNames = []
                 saveSettings()
                 guard let window = selectedWindow,
@@ -810,7 +822,7 @@ final class MainViewModel: ObservableObject {
                     appendLog("游戏窗口未识别，无法发送 /退出隊伍")
                     return
                 }
-                ropePartyWorker.disbandParty(windowID: window.windowID)
+                ropePartyWorker.disbandParty(teamID: teamID, windowID: window.windowID)
             case "remove_rope_party_member":
                 guard let roleName = command.targetRoleName?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !roleName.isEmpty else {
@@ -824,6 +836,28 @@ final class MainViewModel: ObservableObject {
                 }
                 appendLog("收到网页移除成员指令：\(roleName)")
                 ropePartyWorker.removeMember(roleName: roleName, windowID: window.windowID)
+            case "start_boss_invite_cycle":
+                guard let cycleID = command.cycleId,
+                      let roleName = command.targetRoleName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !roleName.isEmpty else {
+                    appendLog("收到的老板邀请周期缺少周期编号或角色名称")
+                    return
+                }
+                ropePartyWorker.startBossInviteCycle(cycleID: cycleID, roleName: roleName)
+            case "cast_boss_buffs":
+                guard let cycleID = command.cycleId else {
+                    appendLog("收到的强制 BUFF 指令缺少周期编号")
+                    return
+                }
+                ropePartyWorker.castBossBuffs(cycleID: cycleID)
+            case "kick_boss_from_party":
+                guard let cycleID = command.cycleId,
+                      let roleName = command.targetRoleName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !roleName.isEmpty else {
+                    appendLog("收到的踢出老板指令缺少周期编号或角色名称")
+                    return
+                }
+                ropePartyWorker.kickBoss(cycleID: cycleID, roleName: roleName)
             default:
                 break
             }
@@ -865,6 +899,63 @@ final class MainViewModel: ObservableObject {
 
         ropePartyWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         ropePartyWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
+        ropePartyWorker.onTeamCreated = { [weak self] in
+            guard let self, let teamID = settings.ropePartyTeamID else { return }
+            remoteMonitorClient.publishRopePartyProgress(
+                teamID: teamID,
+                event: "team_created"
+            )
+            appendLog("已向服务器上报游戏队伍创建成功")
+        }
+        ropePartyWorker.onInvitationSent = { [weak self] roleName in
+            guard let self, let teamID = settings.ropePartyTeamID else { return }
+            remoteMonitorClient.publishRopePartyProgress(
+                teamID: teamID,
+                event: "invitation_sent",
+                roleName: roleName
+            )
+            appendLog("已向服务器上报邀请发送成功：\(roleName)")
+        }
+        ropePartyWorker.onTeamDisbanded = { [weak self] teamID in
+            guard let self else { return }
+            remoteMonitorClient.publishRopePartyProgress(
+                teamID: teamID,
+                event: "team_disbanded"
+            )
+            appendLog("已向服务器上报游戏队伍解散成功")
+        }
+        ropePartyWorker.onBuffDue = { [weak self] in
+            guard let self, let teamID = settings.ropePartyTeamID else { return }
+            remoteMonitorClient.publishRopePartyProgress(teamID: teamID, event: "buff_due")
+            appendLog("BUFF 即将到期，已请求老板邀请周期")
+        }
+        ropePartyWorker.onBossJoined = { [weak self] cycleID in
+            guard let self, let teamID = settings.ropePartyTeamID else { return }
+            remoteMonitorClient.publishRopePartyProgress(
+                teamID: teamID,
+                cycleID: cycleID,
+                event: "boss_joined"
+            )
+            appendLog("已向服务器上报老板进队")
+        }
+        ropePartyWorker.onBossBuffsCompleted = { [weak self] cycleID in
+            guard let self, let teamID = settings.ropePartyTeamID else { return }
+            remoteMonitorClient.publishRopePartyProgress(
+                teamID: teamID,
+                cycleID: cycleID,
+                event: "buff_completed"
+            )
+            appendLog("本客户端老板 BUFF 已释放完毕并上报")
+        }
+        ropePartyWorker.onBossKicked = { [weak self] cycleID in
+            guard let self, let teamID = settings.ropePartyTeamID else { return }
+            remoteMonitorClient.publishRopePartyProgress(
+                teamID: teamID,
+                cycleID: cycleID,
+                event: "boss_kicked"
+            )
+            appendLog("已向服务器上报老板踢出成功")
+        }
         ropePartyWorker.onStopped = { [weak self] in
             self?.isRunning = false
             self?.publishRemoteClientState()
