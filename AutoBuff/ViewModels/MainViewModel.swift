@@ -797,9 +797,8 @@ final class MainViewModel: ObservableObject {
                 settings.ropePartyTeamID = teamID
                 settings.ropePartyIsLeader = command.isLeader
                 ropePartyFirstCreation = command.firstCreation
-                settings.ropePartyInviteRoleNames = command.firstCreation
-                    ? command.inviteRoleNames
-                    : []
+                // 保留队长的完整成员名单，老板周期结束后解散并重建队伍时继续邀请原成员。
+                settings.ropePartyInviteRoleNames = command.inviteRoleNames
                 saveSettings()
                 syncPartyInviteWorker(logMissingRequirements: true)
                 appendLog("已切换为神殿模式 · 挂绳组队，并开启自动同意组队")
@@ -858,6 +857,14 @@ final class MainViewModel: ObservableObject {
                     return
                 }
                 ropePartyWorker.kickBoss(cycleID: cycleID, roleName: roleName)
+            case "disband_boss_party":
+                guard let cycleID = command.cycleId,
+                      let window = selectedWindow,
+                      windowSelector.isWindowValid(windowID: window.windowID) else {
+                    appendLog("收到的老板周期解散指令无效或游戏窗口不可用")
+                    return
+                }
+                ropePartyWorker.disbandBossParty(cycleID: cycleID, windowID: window.windowID)
             default:
                 break
             }
@@ -956,6 +963,13 @@ final class MainViewModel: ObservableObject {
                 event: "boss_kicked"
             )
             appendLog("已向服务器上报老板踢出成功")
+        }
+        ropePartyWorker.onBossCycleDisbanded = { [weak self] cycleID in
+            guard let self, let teamID = settings.ropePartyTeamID else { return }
+            remoteMonitorClient.publishRopePartyProgress(
+                teamID: teamID, cycleID: cycleID, event: "boss_cycle_disbanded"
+            )
+            appendLog("老板 BUFF 周期完成，已解散队伍并准备重新建队")
         }
         ropePartyWorker.onStopped = { [weak self] in
             self?.isRunning = false

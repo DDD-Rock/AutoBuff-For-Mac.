@@ -15,6 +15,7 @@ final class RopePartyWorker: ObservableObject {
     var onBossJoined: ((Int64) -> Void)?
     var onBossBuffsCompleted: ((Int64) -> Void)?
     var onBossKicked: ((Int64) -> Void)?
+    var onBossCycleDisbanded: ((Int64) -> Void)?
 
     private let human = HumanInput()
     private let windowSelector = WindowSelector()
@@ -33,6 +34,9 @@ final class RopePartyWorker: ObservableObject {
     private var bossOrangeCandidateFrames = 0
     private var bossMinimapReady = false
     private var nextBossInviteAt: TimeInterval = 0
+    private var bossJoinDetectedCycleID: Int64?
+    private var nextBossJoinedReportAt: TimeInterval = 0
+    private var latestBossBuffCycleID: Int64 = 0
     private var pendingBossInviteStart: (cycleID: Int64, roleName: String)?
     private var pendingBossBuffCycleID: Int64?
     private var pendingBossKick: (cycleID: Int64, roleName: String)?
@@ -69,6 +73,8 @@ final class RopePartyWorker: ObservableObject {
         task = nil
         pendingCommands = []
         activeBossCycleID = nil
+        bossJoinDetectedCycleID = nil
+        latestBossBuffCycleID = 0
         pendingBossInviteStart = nil
         pendingBossBuffCycleID = nil
         pendingBossKick = nil
@@ -135,19 +141,29 @@ final class RopePartyWorker: ObservableObject {
         bossOrangeCandidateFrames = 0
         bossMinimapReady = false
         nextBossInviteAt = 0
+        bossJoinDetectedCycleID = nil
+        nextBossJoinedReportAt = 0
         log("老板 Buff 周期 \(cycleID) 启动，等待小地图基线后邀请 \(roleName)")
     }
 
     func castBossBuffs(cycleID: Int64) {
         guard isRunning, cycleID > 0 else { return }
+        guard cycleID > latestBossBuffCycleID else { return }
+        latestBossBuffCycleID = cycleID
         pendingBossBuffCycleID = cycleID
         activeBossCycleID = nil
+        bossJoinDetectedCycleID = nil
         log("收到老板进队广播，准备强制释放全部已勾选 BUFF")
     }
 
     func kickBoss(cycleID: Int64, roleName: String) {
         guard isRunning, cycleID > 0, !roleName.isEmpty else { return }
         pendingBossKick = (cycleID, roleName)
+    }
+
+    func disbandBossParty(cycleID: Int64, windowID: CGWindowID) {
+        guard isRunning, cycleID > 0 else { return }
+        pendingCommands.append("__boss_cycle_disband__\(cycleID)")
     }
 
     private func finishOneShot(runID currentRunID: UUID) {
@@ -199,6 +215,15 @@ final class RopePartyWorker: ObservableObject {
             }
             if !pendingCommands.isEmpty {
                 let command = pendingCommands.removeFirst()
+                if command.hasPrefix("__boss_cycle_disband__"),
+                   let cycleID = Int64(command.dropFirst("__boss_cycle_disband__".count)) {
+                    guard await sendChatCommand("/退出隊伍", windowID: windowID) else { break }
+                    log("老板 BUFF 周期完成，已发送解散队伍指令：/退出隊伍")
+                    onBossCycleDisbanded?(cycleID)
+                    await randomSleep(0.8...1.4)
+                    await createPartyAndInvite(roleNames: settings.ropePartyInviteRoleNames, windowID: windowID)
+                    continue
+                }
                 guard await sendChatCommand(command, windowID: windowID) else { break }
                 log("已发送移除成员指令：\(command)")
             }
@@ -252,6 +277,14 @@ final class RopePartyWorker: ObservableObject {
         }
         guard activeBossCycleID == cycleID, bossOrangeBaseline != nil else { return }
         let now = Date().timeIntervalSince1970
+        if bossJoinDetectedCycleID == cycleID {
+            if now >= nextBossJoinedReportAt {
+                onBossJoined?(cycleID)
+                log("等待服务器确认老板进队，已重新上报周期 \(cycleID)")
+                nextBossJoinedReportAt = now + 2
+            }
+            return
+        }
         if now >= nextBossInviteAt {
             let command = "/邀請組隊 \(bossRoleName)"
             if await sendChatCommand(command, windowID: windowID) {
@@ -276,8 +309,8 @@ final class RopePartyWorker: ObservableObject {
         }
         guard count != bossOrangeBaseline else { return }
         log("橙点数量由 \(bossOrangeBaseline ?? 0) 变为 \(count)，判定老板已进队")
-        activeBossCycleID = nil
-        onBossJoined?(cycleID)
+        bossJoinDetectedCycleID = cycleID
+        nextBossJoinedReportAt = 0
     }
 
     private func reportBuffDueIfNeeded() {
