@@ -326,6 +326,8 @@ final class RemoteMonitorClient {
     private var lastMapID: String?
     private var isSendInProgress = false
     private var pendingControlMessages: [Data] = []
+    private var pendingTeamJoined: RemoteTeamJoinedPayload?
+    private var teamJoinedRetryTask: Task<Void, Never>?
     private var pendingFrameMessage: Data?
     private var pendingEXPMessage: Data?
     private var pendingRuneMessage: Data?
@@ -437,6 +439,7 @@ final class RemoteMonitorClient {
         task.resume()
         sendStatus(online: true, message: "客户端已连接")
         publishClientState(mode: latestMode, running: latestRunning)
+        resendPendingTeamJoined()
         Task { [weak self, weak task] in
             guard let self, let task else { return }
             do {
@@ -460,10 +463,23 @@ final class RemoteMonitorClient {
     }
 
     func publishTeamJoined(teamID: Int64, roleName: String) {
-        guard socket != nil else { return }
+        pendingTeamJoined = RemoteTeamJoinedPayload(teamId: teamID, roleName: roleName)
+        resendPendingTeamJoined()
+        teamJoinedRetryTask?.cancel()
+        teamJoinedRetryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, pendingTeamJoined != nil else { return }
+                resendPendingTeamJoined()
+            }
+        }
+    }
+
+    private func resendPendingTeamJoined() {
+        guard socket != nil, let pendingTeamJoined else { return }
         send(
             type: "team_joined",
-            payload: RemoteTeamJoinedPayload(teamId: teamID, roleName: roleName)
+            payload: pendingTeamJoined
         )
     }
 
@@ -639,6 +655,9 @@ final class RemoteMonitorClient {
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         resetSendQueue()
+        pendingTeamJoined = nil
+        teamJoinedRetryTask?.cancel()
+        teamJoinedRetryTask = nil
         publisherURL = nil
         lastMapID = nil
     }
@@ -783,6 +802,13 @@ final class RemoteMonitorClient {
                 try? RemoteMonitorLocalStore.shared.saveClientName(name)
             }
         } else if decoded.type == "command", let action = decoded.action {
+            if action == "team_joined_ack", let teamID = decoded.teamId,
+               pendingTeamJoined?.teamId == teamID {
+                pendingTeamJoined = nil
+                teamJoinedRetryTask?.cancel()
+                teamJoinedRetryTask = nil
+                return
+            }
             onCommand?(
                 RemoteClientCommand(
                     action: action,
@@ -859,11 +885,6 @@ final class RemoteMonitorClient {
                 pendingZoneMessage = data
             default:
                 pendingControlMessages.append(data)
-                if pendingControlMessages.count > 4 {
-                    pendingControlMessages.removeFirst(
-                        pendingControlMessages.count - 4
-                    )
-                }
             }
             drainSendQueue()
         } catch {

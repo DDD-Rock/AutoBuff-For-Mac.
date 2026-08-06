@@ -78,20 +78,16 @@ final class PartyInviteWorker: ObservableObject {
         }
         await sleep(0.15)
 
-        var point = initialPoint
-        for attempt in 1...2 where isRunning && !Task.isCancelled {
-            if attempt > 1,
-               let refreshedPoint = try? await detector.findAcceptButtonScreenPoint() {
-                point = refreshedPoint
-            }
-            await human.clickAt(screenPoint: point, offsetRange: 2)
-            await sleep(0.3)
+        await human.clickAt(screenPoint: initialPoint, offsetRange: 2)
+        for _ in 0..<14 where isRunning && !Task.isCancelled {
+            await sleep(0.15)
             if (try? await detector.findAcceptButtonScreenPoint()) == nil {
                 onLog?("已同意队伍邀请")
                 onInviteAccepted?()
                 return
             }
         }
+        onLog?("邀请弹窗点击后仍未消失，本次不报告入队成功")
     }
 
     private func sleep(_ seconds: Double) async {
