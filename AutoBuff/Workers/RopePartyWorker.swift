@@ -354,26 +354,22 @@ final class RopePartyWorker: ObservableObject {
     }
 
     private func sendChatCommand(_ command: String, windowID: CGWindowID) async -> Bool {
-        guard await ensureGameFocus(windowID: windowID) else { return false }
-        do {
-            try await human.pressNamedKey("Enter")
-        } catch {
-            onError?("激活聊天窗口失败：\(error.localizedDescription)")
-            return false
-        }
-        await randomSleep(0.18...0.42)
-        guard isRunning, !Task.isCancelled else { return false }
-        guard await ensureGameFocus(windowID: windowID) else { return false }
-        await human.typeText(command)
-        await randomSleep(0.12...0.32)
-        guard isRunning, !Task.isCancelled else { return false }
-        guard await ensureGameFocus(windowID: windowID) else { return false }
-        do {
-            try await human.pressNamedKey("Enter")
-            return true
-        } catch {
-            onError?("发送聊天指令失败：\(error.localizedDescription)")
-            return false
+        await ChatInputTransactionCoordinator.shared.withTransaction {
+            guard await ensureGameFocus(windowID: windowID) else { return false }
+            guard isRunning, !Task.isCancelled else { return false }
+            do {
+                // Cancellation is deliberately ignored after this first Enter.
+                // The second Enter must be sent before another command can begin.
+                try await human.pressNamedKey("Enter")
+                await randomSleep(0.18...0.42)
+                await human.typeText(command)
+                await randomSleep(0.12...0.32)
+                try await human.pressNamedKey("Enter")
+                return true
+            } catch {
+                onError?("发送聊天指令失败：\(error.localizedDescription)")
+                return false
+            }
         }
     }
 

@@ -2,6 +2,37 @@ import AppKit
 import CoreGraphics
 import Foundation
 
+actor ChatInputTransactionCoordinator {
+    static let shared = ChatInputTransactionCoordinator()
+
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func withTransaction<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        guard isLocked else {
+            isLocked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func release() {
+        guard !waiters.isEmpty else {
+            isLocked = false
+            return
+        }
+        waiters.removeFirst().resume()
+    }
+}
+
 actor HumanInput {
     private var currentDirection: Direction?
     private var pressedNamedKeyCodes: Set<CGKeyCode> = []

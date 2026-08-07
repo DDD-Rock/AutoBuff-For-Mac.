@@ -241,21 +241,20 @@ final class LoungeWorker: ObservableObject {
     /// 每条消息都重新打开聊天框。字符本身由 HumanInput 使用 50～120ms
     /// 的随机间隔输入，这里再为打开聊天和发送前留出短暂停顿。
     private func sendChatMessage(_ message: String, suffix: String? = nil) async throws {
-        guard isRunning, !Task.isCancelled else { return }
-        try await human.pressNamedKey("Enter")
-        await randomSleep(0.18...0.42)
-        guard isRunning, !Task.isCancelled else { return }
-        await human.typeText(message)
-        await randomSleep(0.12...0.32)
-        guard isRunning, !Task.isCancelled else { return }
-        if let suffix {
-            try await human.pressNamedKey("Space")
-            await randomSleep(0.08...0.18)
-            await human.typeText(suffix)
-            await randomSleep(0.12...0.32)
+        try await ChatInputTransactionCoordinator.shared.withTransaction {
             guard isRunning, !Task.isCancelled else { return }
+            try await human.pressNamedKey("Enter")
+            await randomSleep(0.18...0.42)
+            await human.typeText(message)
+            await randomSleep(0.12...0.32)
+            if let suffix {
+                try await human.pressNamedKey("Space")
+                await randomSleep(0.08...0.18)
+                await human.typeText(suffix)
+                await randomSleep(0.12...0.32)
+            }
+            try await human.pressNamedKey("Enter")
         }
-        try await human.pressNamedKey("Enter")
     }
 
     private func performAntiStuckMovement(windowID: CGWindowID) async {

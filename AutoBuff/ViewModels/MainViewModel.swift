@@ -26,6 +26,15 @@ private struct MonitorFramePresentation {
 @available(macOS 14.0, *)
 @MainActor
 final class MainViewModel: ObservableObject {
+    private enum ActiveWorker: Equatable {
+        case liveFlower
+        case deadFlower
+        case lounge
+        case ropeParty
+        case followHeal
+        case monitor
+    }
+
     @Published var settings: AppSettings
     @Published var mode: AppMode = .deadFlower
     @Published var selectedWindow: GameWindowInfo?
@@ -96,6 +105,7 @@ final class MainViewModel: ObservableObject {
     private var isMouseFollowVerificationTestHolding = false
     private var mouseFollowVerificationTestHoldTask: Task<Void, Never>?
     private var safeZoneStabilizer = SafeZoneStabilizer()
+    private var activeWorker: ActiveWorker?
 
     enum KeyboardTarget: Equatable {
         case buff(Int)
@@ -276,6 +286,7 @@ final class MainViewModel: ObservableObject {
         countdowns = [:]
         switch mode {
         case .liveFlower:
+            activeWorker = .liveFlower
             let skills = buildLiveSkills()
             liveWorker.start(
                 skills: skills,
@@ -286,11 +297,13 @@ final class MainViewModel: ObservableObject {
             )
             appendLog("活花模式已启动")
         case .deadFlower:
+            activeWorker = .deadFlower
             deadWorker.start(settings: settings, windowID: window.windowID)
             appendLog("死花模式已启动")
         case .temple:
             switch settings.templeFunction {
             case .freeEntry:
+                activeWorker = .deadFlower
                 // “进出自由”与死花的运行流程一致；其余神殿功能在各自配置明确后
                 // 再接入独立 Worker，避免三套行为耦合在 DeadFlowerWorker 中。
                 deadWorker.start(
@@ -300,9 +313,11 @@ final class MainViewModel: ObservableObject {
                 )
                 appendLog("神殿模式 · 进出自由已启动")
             case .lounge:
+                activeWorker = .lounge
                 loungeWorker.start(settings: settings, windowID: window.windowID)
                 appendLog("神殿模式 · 休息室已启动")
             case .ropeParty:
+                activeWorker = .ropeParty
                 let launchSettings = settings
                 ropePartyWorker.start(
                     settings: launchSettings,
@@ -317,9 +332,11 @@ final class MainViewModel: ObservableObject {
                 appendLog("神殿模式 · 挂绳组队已启动")
             }
         case .followHeal:
+            activeWorker = .followHeal
             followHealWorker.start(settings: settings, windowID: window.windowID)
             appendLog("跟补模式已启动")
         case .monitor:
+            activeWorker = .monitor
             partyInviteWorker.stop()
             if !remoteMonitorAuthenticated {
                 appendLog("未登录远程账号，仅使用软件内本地预览")
@@ -334,6 +351,7 @@ final class MainViewModel: ObservableObject {
     }
 
     func stopWorker(resumePartyInvite: Bool = true) {
+        activeWorker = nil
         liveWorker.stop()
         deadWorker.stop()
         loungeWorker.stop()
@@ -901,31 +919,33 @@ final class MainViewModel: ObservableObject {
         remoteMonitorClient.publishClientState(mode: mode.rawValue, running: isRunning)
     }
 
+    private func handleWorkerStopped(_ worker: ActiveWorker) {
+        guard activeWorker == worker else { return }
+        activeWorker = nil
+        isRunning = false
+        countdowns = [:]
+        publishRemoteClientState()
+    }
+
     private func wireWorkers() {
         liveWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         liveWorker.onCountdown = { [weak self] info in self?.countdowns = info }
         liveWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
         liveWorker.onStopped = { [weak self] in
-            self?.isRunning = false
-            self?.countdowns = [:]
-            self?.publishRemoteClientState()
+            self?.handleWorkerStopped(.liveFlower)
         }
 
         deadWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         deadWorker.onCountdown = { [weak self] info in self?.countdowns = info }
         deadWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
         deadWorker.onStopped = { [weak self] in
-            self?.isRunning = false
-            self?.countdowns = [:]
-            self?.publishRemoteClientState()
+            self?.handleWorkerStopped(.deadFlower)
         }
 
         loungeWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         loungeWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
         loungeWorker.onStopped = { [weak self] in
-            self?.isRunning = false
-            self?.countdowns = [:]
-            self?.publishRemoteClientState()
+            self?.handleWorkerStopped(.lounge)
         }
 
         ropePartyWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
@@ -996,18 +1016,14 @@ final class MainViewModel: ObservableObject {
             appendLog("老板 BUFF 周期完成，已解散队伍并准备重新建队")
         }
         ropePartyWorker.onStopped = { [weak self] in
-            self?.isRunning = false
-            self?.countdowns = [:]
-            self?.publishRemoteClientState()
+            self?.handleWorkerStopped(.ropeParty)
         }
 
         followHealWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         followHealWorker.onCountdown = { [weak self] info in self?.countdowns = info }
         followHealWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
         followHealWorker.onStopped = { [weak self] in
-            self?.isRunning = false
-            self?.countdowns = [:]
-            self?.publishRemoteClientState()
+            self?.handleWorkerStopped(.followHeal)
         }
 
         partyInviteWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
@@ -1095,6 +1111,8 @@ final class MainViewModel: ObservableObject {
         }
         monitoringSession.onStopped = { [weak self] reason in
             guard let self else { return }
+            guard activeWorker == .monitor else { return }
+            activeWorker = nil
             isRunning = false
             clearMonitorState(status: reason)
             appendLog(reason)
