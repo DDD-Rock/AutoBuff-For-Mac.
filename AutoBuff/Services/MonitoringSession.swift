@@ -74,6 +74,7 @@ enum MonitorFrameScheduler {
     static let mapMatchInterval = 6
     /// 整窗识别任务每 500ms 抓一帧；符文识别每两帧做一次，即约每秒一次。
     static let windowFrameInterval = Duration.milliseconds(500)
+    static let verificationRecordingFrameInterval = Duration.milliseconds(100)
     static let runeAlertFrameInterval = 2
 
     static func shouldValidateWindow(frameIndex: Int) -> Bool {
@@ -122,11 +123,13 @@ final class MonitoringSession {
         _ isPresent: Bool,
         _ detection: MouseFollowVerificationDetection?
     ) -> Void)?
+    var onVerificationRecordingEvent: ((String) -> Void)?
     var onStopped: ((String) -> Void)?
 
     private let minimap = MinimapMonitor()
     private let windowSelector = WindowSelector()
     private let expCaptureService = GameCaptureService()
+    private let verificationRecorder = VerificationRegionRecorder()
     private var task: Task<Void, Never>?
     private var expTask: Task<Void, Never>?
     private var activeStream: GameRegionCaptureStream?
@@ -159,6 +162,7 @@ final class MonitoringSession {
         expTask?.cancel()
         expTask = nil
         expCaptureService.clearCaptureCache()
+        finishVerificationRecording()
         let stream = activeStream
         activeStream = nil
         if let stream {
@@ -169,8 +173,8 @@ final class MonitoringSession {
         minimap.clearMinimapRegion()
     }
 
-    /// 整窗识别任务：每 500ms 抓一帧完整游戏窗口，EXP 与鼠标跟随验证每帧识别，
-    /// 符文提示每两帧识别一次（约每秒一次）。所有任务共用同一帧，不额外截图。
+    /// 平时每 500ms 抓一帧完整游戏窗口；验证录像期间提高到 10 FPS，但 EXP 与符文
+    /// 仍保持原识别频率。所有任务共用同一帧，不额外截图。
     private func runWindowRecognition(windowID: CGWindowID, runID currentRunID: UUID) async {
         // 两帧一致即可发布：在 500ms 固定周期下，数值变化约 0.5～1 秒可见。
         var stabilizer = EXPRecognitionStabilizer(requiredMatches: 2, toleratedMisses: 3)
@@ -184,9 +188,13 @@ final class MonitoringSession {
             let cycleStartedAt = ContinuousClock.now
             do {
                 let captured = try await expCaptureService.captureBGR(windowID: windowID)
-                let shouldDetectRune = MonitorFrameScheduler.shouldDetectRuneAlert(
-                    windowFrameIndex: windowFrameIndex
-                )
+                let recordingStride = verificationRecorder.isRecording ? 5 : 1
+                let shouldRecognizeEXP = windowFrameIndex.isMultiple(of: recordingStride)
+                let shouldDetectRune = verificationRecorder.isRecording
+                    ? windowFrameIndex.isMultiple(of: 10)
+                    : MonitorFrameScheduler.shouldDetectRuneAlert(
+                        windowFrameIndex: windowFrameIndex
+                    )
                 let shouldDetectVerification = MonitorFrameScheduler
                     .shouldDetectMouseFollowVerification(windowFrameIndex: windowFrameIndex)
                 let analysis = await Task.detached(priority: .utility) {
@@ -194,7 +202,9 @@ final class MonitoringSession {
                         shouldDetectVerification
                             ? MouseFollowVerificationDetector.detect(in: captured.buffer)
                             : nil,
-                        expRecognizer.recognize(in: captured.buffer),
+                        shouldRecognizeEXP
+                            ? expRecognizer.recognize(in: captured.buffer)
+                            : nil,
                         shouldDetectRune
                             ? RuneAlertDetector.detect(in: captured.buffer)
                             : nil
@@ -208,22 +218,28 @@ final class MonitoringSession {
                         &verificationStabilizer,
                         detection: analysis.0
                     )
+                    updateVerificationRecording(
+                        frame: captured.buffer,
+                        stabilizer: verificationStabilizer
+                    )
                 }
                 if shouldDetectRune {
                     publishRuneAlert(&runeStabilizer, detection: analysis.2)
                 }
 
-                let stable = stabilizer.update(analysis.1)
-                onEXPReading?(stable)
-                if let stable {
-                    onEXPStatus?(
-                        "\(stable.recognitionMethod.displayName) · 置信度 "
-                            + "\(Int((stable.confidence * 100).rounded()))%"
-                    )
-                } else if analysis.1 != nil {
-                    onEXPStatus?("正在确认 EXP 数值...")
-                } else {
-                    onEXPStatus?("未识别到 EXP")
+                if shouldRecognizeEXP {
+                    let stable = stabilizer.update(analysis.1)
+                    onEXPReading?(stable)
+                    if let stable {
+                        onEXPStatus?(
+                            "\(stable.recognitionMethod.displayName) · 置信度 "
+                                + "\(Int((stable.confidence * 100).rounded()))%"
+                        )
+                    } else if analysis.1 != nil {
+                        onEXPStatus?("正在确认 EXP 数值...")
+                    } else {
+                        onEXPStatus?("未识别到 EXP")
+                    }
                 }
             } catch {
                 consecutiveCaptureFailures += 1
@@ -232,13 +248,19 @@ final class MonitoringSession {
                 // 读不到画面时不能继续声称符文提示还在，否则服务器会一直推送。
                 publishRuneAlert(&runeStabilizer, detection: nil)
                 publishMouseFollowVerification(&verificationStabilizer, detection: nil)
+                if !verificationStabilizer.isPresent {
+                    finishVerificationRecording()
+                }
                 if consecutiveCaptureFailures == 1 || consecutiveCaptureFailures.isMultiple(of: 5) {
                     onEXPStatus?("EXP 画面读取失败")
                 }
                 expCaptureService.clearCaptureCache()
             }
             let elapsed = cycleStartedAt.duration(to: .now)
-            let remaining = MonitorFrameScheduler.windowFrameInterval - elapsed
+            let targetInterval = verificationRecorder.isRecording
+                ? MonitorFrameScheduler.verificationRecordingFrameInterval
+                : MonitorFrameScheduler.windowFrameInterval
+            let remaining = targetInterval - elapsed
             if remaining > .zero {
                 try? await Task.sleep(for: remaining)
             }
@@ -262,6 +284,35 @@ final class MonitoringSession {
     ) {
         stabilizer.update(detection)
         onMouseFollowVerification?(stabilizer.isPresent, stabilizer.latestDetection)
+    }
+
+    private func updateVerificationRecording(
+        frame: ImageBuffer,
+        stabilizer: MouseFollowVerificationStabilizer
+    ) {
+        do {
+            if stabilizer.isPresent, let detection = stabilizer.latestDetection {
+                if verificationRecorder.isRecording {
+                    try verificationRecorder.append(frame: frame, bodyRect: detection.bodyRect)
+                } else {
+                    let url = try verificationRecorder.start(
+                        frame: frame,
+                        bodyRect: detection.bodyRect
+                    )
+                    onVerificationRecordingEvent?("已开始录制验证区域：\(url.lastPathComponent)")
+                }
+            } else {
+                finishVerificationRecording()
+            }
+        } catch {
+            verificationRecorder.stop()
+            onVerificationRecordingEvent?("验证区域录制失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func finishVerificationRecording() {
+        guard let url = verificationRecorder.stop() else { return }
+        onVerificationRecordingEvent?("验证区域录像已保存：\(url.path)")
     }
 
     private func run(windowID: CGWindowID, maps: [MapTopology], runID currentRunID: UUID) async {
@@ -432,6 +483,7 @@ final class MonitoringSession {
         expTask?.cancel()
         expTask = nil
         expCaptureService.clearCaptureCache()
+        finishVerificationRecording()
         let stream = activeStream
         activeStream = nil
         if let stream {

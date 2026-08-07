@@ -1109,6 +1109,9 @@ final class MainViewModel: ObservableObject {
                 detection: detection
             )
         }
+        monitoringSession.onVerificationRecordingEvent = { [weak self] message in
+            self?.appendLog(message)
+        }
         monitoringSession.onStopped = { [weak self] reason in
             guard let self else { return }
             guard activeWorker == .monitor else { return }
