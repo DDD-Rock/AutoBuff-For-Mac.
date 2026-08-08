@@ -37,6 +37,7 @@ final class RopePartyWorker: ObservableObject {
     private var bossJoinDetectedCycleID: Int64?
     private var nextBossJoinedReportAt: TimeInterval = 0
     private var latestBossBuffCycleID: Int64 = 0
+    private var latestBossDisbandCycleID: Int64 = 0
     private var pendingBossInviteStart: (cycleID: Int64, roleName: String)?
     private var pendingBossBuffCycleID: Int64?
     private var pendingBossKick: (cycleID: Int64, roleName: String)?
@@ -75,6 +76,7 @@ final class RopePartyWorker: ObservableObject {
         activeBossCycleID = nil
         bossJoinDetectedCycleID = nil
         latestBossBuffCycleID = 0
+        latestBossDisbandCycleID = 0
         pendingBossInviteStart = nil
         pendingBossBuffCycleID = nil
         pendingBossKick = nil
@@ -163,6 +165,8 @@ final class RopePartyWorker: ObservableObject {
 
     func disbandBossParty(cycleID: Int64, windowID: CGWindowID) {
         guard isRunning, cycleID > 0 else { return }
+        guard cycleID > latestBossDisbandCycleID else { return }
+        latestBossDisbandCycleID = cycleID
         pendingCommands.append("__boss_cycle_disband__\(cycleID)")
     }
 
@@ -333,7 +337,8 @@ final class RopePartyWorker: ObservableObject {
             return true
         }
         guard await ensureGameFocus(windowID: windowID) else { return false }
-        for (index, buff) in configuredBuffs.enumerated() where isRunning && !Task.isCancelled {
+        for (index, buff) in configuredBuffs.enumerated() {
+            guard isRunning, !Task.isCancelled else { return false }
             do {
                 try await human.pressNamedKey(buff.key)
                 await randomSleep(0.1...0.3)
@@ -346,6 +351,7 @@ final class RopePartyWorker: ObservableObject {
                 await randomSleep(2.0...3.0)
             }
         }
+        guard isRunning, !Task.isCancelled else { return false }
         let now = Date().timeIntervalSince1970
         buffDeadlines = Dictionary(uniqueKeysWithValues: configuredBuffs.map { ($0.id, now + $0.duration) })
         countdownPublisher.replaceDeadlines(buffDeadlines, now: now)

@@ -246,6 +246,7 @@ private struct RemoteClientStatePayload: Encodable {
 private struct RemoteTeamJoinedPayload: Encodable {
     let teamId: Int64
     let roleName: String
+    let receiptId: String
 }
 
 private struct RemoteRopePartyProgressPayload: Encodable {
@@ -253,6 +254,7 @@ private struct RemoteRopePartyProgressPayload: Encodable {
     let cycleId: Int64?
     let event: String
     let roleName: String?
+    let receiptId: String?
 }
 
 struct RemoteClientCommand {
@@ -274,6 +276,7 @@ private struct RemoteServerMessage: Decodable {
     let roleName: String?
     let targetRoleName: String?
     let cycleId: Int64?
+    let receiptId: String?
     let action: String?
     let reason: String?
     let teamId: Int64?
@@ -328,6 +331,8 @@ final class RemoteMonitorClient {
     private var pendingControlMessages: [Data] = []
     private var pendingTeamJoined: RemoteTeamJoinedPayload?
     private var teamJoinedRetryTask: Task<Void, Never>?
+    private var pendingRopeProgress: [String: RemoteRopePartyProgressPayload] = [:]
+    private var ropeProgressRetryTask: Task<Void, Never>?
     private var pendingFrameMessage: Data?
     private var pendingEXPMessage: Data?
     private var pendingRuneMessage: Data?
@@ -440,6 +445,7 @@ final class RemoteMonitorClient {
         sendStatus(online: true, message: "客户端已连接")
         publishClientState(mode: latestMode, running: latestRunning)
         resendPendingTeamJoined()
+        resendPendingRopeProgress()
         Task { [weak self, weak task] in
             guard let self, let task else { return }
             do {
@@ -463,7 +469,11 @@ final class RemoteMonitorClient {
     }
 
     func publishTeamJoined(teamID: Int64, roleName: String) {
-        pendingTeamJoined = RemoteTeamJoinedPayload(teamId: teamID, roleName: roleName)
+        pendingTeamJoined = RemoteTeamJoinedPayload(
+            teamId: teamID,
+            roleName: roleName,
+            receiptId: UUID().uuidString
+        )
         resendPendingTeamJoined()
         teamJoinedRetryTask?.cancel()
         teamJoinedRetryTask = Task { [weak self] in
@@ -489,16 +499,48 @@ final class RemoteMonitorClient {
         event: String,
         roleName: String? = nil
     ) {
-        guard socket != nil else { return }
-        send(
-            type: "rope_party_progress",
-            payload: RemoteRopePartyProgressPayload(
-                teamId: teamID,
-                cycleId: cycleID,
-                event: event,
-                roleName: roleName
-            )
+        guard publisherEnabled else { return }
+        let reliableEvents: Set<String> = [
+            "team_created", "invitation_sent", "team_disbanded",
+            "buff_completed", "boss_cycle_disbanded"
+        ]
+        let receiptID = reliableEvents.contains(event) ? UUID().uuidString : nil
+        let payload = RemoteRopePartyProgressPayload(
+            teamId: teamID,
+            cycleId: cycleID,
+            event: event,
+            roleName: roleName,
+            receiptId: receiptID
         )
+        if let receiptID {
+            pendingRopeProgress[receiptID] = payload
+            startRopeProgressRetryTaskIfNeeded()
+        }
+        guard socket != nil else { return }
+        send(type: "rope_party_progress", payload: payload)
+    }
+
+    private func resendPendingRopeProgress() {
+        guard socket != nil else { return }
+        for payload in pendingRopeProgress.values {
+            send(type: "rope_party_progress", payload: payload)
+        }
+        startRopeProgressRetryTaskIfNeeded()
+    }
+
+    private func startRopeProgressRetryTaskIfNeeded() {
+        guard !pendingRopeProgress.isEmpty, ropeProgressRetryTask == nil else { return }
+        ropeProgressRetryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self else { return }
+                if pendingRopeProgress.isEmpty {
+                    ropeProgressRetryTask = nil
+                    return
+                }
+                resendPendingRopeProgress()
+            }
+        }
     }
 
     func saveRoleName(_ roleName: String) async throws -> String {
@@ -658,6 +700,9 @@ final class RemoteMonitorClient {
         pendingTeamJoined = nil
         teamJoinedRetryTask?.cancel()
         teamJoinedRetryTask = nil
+        pendingRopeProgress.removeAll()
+        ropeProgressRetryTask?.cancel()
+        ropeProgressRetryTask = nil
         publisherURL = nil
         lastMapID = nil
     }
@@ -803,10 +848,20 @@ final class RemoteMonitorClient {
             }
         } else if decoded.type == "command", let action = decoded.action {
             if action == "team_joined_ack", let teamID = decoded.teamId,
-               pendingTeamJoined?.teamId == teamID {
+               let receiptID = decoded.receiptId,
+               pendingTeamJoined?.teamId == teamID,
+               pendingTeamJoined?.receiptId == receiptID {
                 pendingTeamJoined = nil
                 teamJoinedRetryTask?.cancel()
                 teamJoinedRetryTask = nil
+                return
+            }
+            if action == "rope_progress_ack", let receiptID = decoded.receiptId {
+                pendingRopeProgress.removeValue(forKey: receiptID)
+                if pendingRopeProgress.isEmpty {
+                    ropeProgressRetryTask?.cancel()
+                    ropeProgressRetryTask = nil
+                }
                 return
             }
             onCommand?(

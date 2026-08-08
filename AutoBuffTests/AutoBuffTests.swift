@@ -835,6 +835,8 @@ struct SettingsManagerTests {
         #expect(FollowHealNavigation.walkingDirectionToBase(currentX: 99.5, baseX: 100) == .right)
         #expect(FollowHealNavigation.walkingDirectionToBase(currentX: 100.5, baseX: 100) == .left)
         #expect(FollowHealNavigation.walkingDirectionToBase(currentX: 100, baseX: 100) == nil)
+        #expect(FollowHealNavigation.oppositeWalkingDirection(.left) == .right)
+        #expect(FollowHealNavigation.oppositeWalkingDirection(.right) == .left)
     }
 
     @Test func followHealWalkingPlanStopsAtTheConfiguredBoundary() {
@@ -917,12 +919,13 @@ struct SettingsManagerTests {
     }
 
     @Test func followHealWalkingKeepaliveUsesHistoricalTiming() {
-        #expect(FollowHealNavigation.walkingKeepaliveDurationMS == 200...300)
-        #expect(FollowHealNavigation.walkingKeepaliveRecoveryRange == 0.08...0.22)
+        #expect(FollowHealNavigation.walkingKeepaliveFirstStepMS == 180...240)
+        #expect(FollowHealNavigation.walkingKeepaliveSecondStepReductionMS == 30...50)
+        #expect(FollowHealNavigation.walkingRecoveryMaximumAttempts == 3)
         for _ in 0..<20 {
             let interval = FollowHealNavigation.nextWalkingKeepaliveInterval()
-            #expect(interval >= 8)
-            #expect(interval <= 12)
+            #expect(interval >= 5)
+            #expect(interval <= 8)
         }
     }
 

@@ -851,6 +851,15 @@ final class MainViewModel: ObservableObject {
                     return
                 }
                 ropePartyWorker.disbandParty(teamID: teamID, windowID: window.windowID)
+            case "clear_rope_party":
+                stopWorker(resumePartyInvite: false)
+                settings.autoAcceptPartyInviteEnabled = false
+                settings.ropePartyTeamID = nil
+                settings.ropePartyIsLeader = false
+                ropePartyFirstCreation = false
+                settings.ropePartyInviteRoleNames = []
+                saveSettings()
+                appendLog("网页队伍已解散或本角色已被移除，挂绳组队状态已清理")
             case "remove_rope_party_member":
                 guard let roleName = command.targetRoleName?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !roleName.isEmpty else {
@@ -1034,8 +1043,7 @@ final class MainViewModel: ObservableObject {
         partyInviteWorker.onInviteAccepted = { [weak self] in
             guard let self else { return }
             loungeWorker.partyInviteAccepted()
-            if isRunning,
-               mode == .temple,
+            if mode == .temple,
                settings.templeFunction == .ropeParty,
                let teamID = settings.ropePartyTeamID,
                !settings.characterName.isEmpty {

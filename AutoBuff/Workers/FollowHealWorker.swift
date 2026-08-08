@@ -4,9 +4,10 @@ import Foundation
 enum FollowHealNavigation {
     static let playerMarkerMinArea = 5
     static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 4...7
-    static let walkingKeepaliveIntervalRange: ClosedRange<TimeInterval> = 8...12
-    static let walkingKeepaliveDurationMS: ClosedRange<Int> = 200...300
-    static let walkingKeepaliveRecoveryRange: ClosedRange<TimeInterval> = 0.08...0.22
+    static let walkingKeepaliveIntervalRange: ClosedRange<TimeInterval> = 5...8
+    static let walkingKeepaliveFirstStepMS: ClosedRange<Int> = 180...240
+    static let walkingKeepaliveSecondStepReductionMS: ClosedRange<Int> = 30...50
+    static let walkingRecoveryMaximumAttempts = 3
     static let healHoldRange: ClosedRange<TimeInterval> = 8...12
     static let healGapRange: ClosedRange<TimeInterval> = 0.25...0.60
     static let newCollisionDistance: CGFloat = 1
@@ -123,6 +124,10 @@ enum FollowHealNavigation {
 
     static func walkingKeepaliveDirection(currentX: CGFloat, baseX: CGFloat) -> HumanInput.Direction {
         walkingDirectionToBase(currentX: currentX, baseX: baseX) ?? .right
+    }
+
+    static func oppositeWalkingDirection(_ direction: HumanInput.Direction) -> HumanInput.Direction {
+        direction == .left ? .right : .left
     }
 
     static func nextWalkingKeepaliveInterval() -> TimeInterval {
@@ -416,6 +421,7 @@ final class FollowHealWorker: ObservableObject {
                     await teleportBackForWalkingStrategy(
                         currentX: player.x,
                         baseX: baseX,
+                        boundaryTolerance: nearAnchorTolerance,
                         teleportKey: teleportKey
                     )
                     return
@@ -508,7 +514,15 @@ final class FollowHealWorker: ObservableObject {
             currentX: currentX,
             baseX: baseX
         )
-        log("防卡技能小走：当前X=\(format(currentX))，向\(direction == .left ? "左" : "右")走")
+        let returnDirection = FollowHealNavigation.oppositeWalkingDirection(direction)
+        let firstStepMS = Int.random(in: FollowHealNavigation.walkingKeepaliveFirstStepMS)
+        let secondStepMS = firstStepMS
+            - Int.random(in: FollowHealNavigation.walkingKeepaliveSecondStepReductionMS)
+        log(
+            "防卡技能双向短走：先向\(direction == .left ? "左" : "右") "
+                + "\(firstStepMS)ms，再向\(returnDirection == .left ? "左" : "右") "
+                + "\(secondStepMS)ms"
+        )
         if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) {
             return
         }
@@ -520,35 +534,99 @@ final class FollowHealWorker: ObservableObject {
         } else {
             await human.moveRight()
         }
-        await sleep(Double(Int.random(in: FollowHealNavigation.walkingKeepaliveDurationMS)) / 1_000)
+        await sleep(Double(firstStepMS) / 1_000)
+        guard isRunning && !Task.isCancelled else {
+            await human.stopMove()
+            return
+        }
+        if returnDirection == .left {
+            await human.moveLeft()
+        } else {
+            await human.moveRight()
+        }
+        await sleep(Double(secondStepMS) / 1_000)
         await human.stopMove()
-        await randomSleep(FollowHealNavigation.walkingKeepaliveRecoveryRange)
     }
 
     private func teleportBackForWalkingStrategy(
         currentX: CGFloat,
         baseX: CGFloat,
+        boundaryTolerance: CGFloat,
         teleportKey: String
     ) async {
-        guard let direction = FollowHealNavigation.walkingDirectionToBase(
-            currentX: currentX,
-            baseX: baseX
-        ) else { return }
-        log("左右走防卡越界：当前X=\(format(currentX))，使用一次瞬移回安全区")
-        do {
-            try await human.performDirectionalSkill(
-                direction,
-                skillKey: teleportKey,
-                directionLeadMS: Int.random(in: 35...75),
-                skillHoldMS: Int.random(in: 50...110),
-                directionReleaseDelayMS: Int.random(in: 25...65)
+        var latestX = currentX
+        for attempt in 1...FollowHealNavigation.walkingRecoveryMaximumAttempts {
+            guard let direction = FollowHealNavigation.walkingDirectionToBase(
+                currentX: latestX,
+                baseX: baseX
+            ) else { return }
+            log(
+                "左右走防卡越界：当前X=\(format(latestX))，"
+                    + "第 \(attempt) 次朝标记点方向瞬移"
             )
-            await randomSleep(0.15...0.25)
-        } catch is CancellationError {
-            return
-        } catch {
-            onError?("瞬移键错误: \(error.localizedDescription)")
+            do {
+                try await human.performDirectionalSkill(
+                    direction,
+                    skillKey: teleportKey,
+                    directionLeadMS: Int.random(in: 35...75),
+                    skillHoldMS: Int.random(in: 50...110),
+                    directionReleaseDelayMS: Int.random(in: 25...65)
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                onError?("瞬移键错误: \(error.localizedDescription)")
+                return
+            }
+            guard let landingX = await waitForWalkingStrategyLanding() else {
+                log("⚠️ 越界瞬移后未识别到稳定黄点，停止连续瞬移")
+                return
+            }
+            latestX = landingX
+            if !FollowHealNavigation.isOutsideWalkingBoundary(
+                currentX: landingX,
+                baseX: baseX,
+                tolerance: boundaryTolerance
+            ) {
+                log("越界瞬移已回到安全区：当前X=\(format(landingX))")
+                return
+            }
         }
+        log(
+            "⚠️ 连续瞬移 \(FollowHealNavigation.walkingRecoveryMaximumAttempts) 次后"
+                + "仍在界外，恢复补血并等待下轮检测"
+        )
+    }
+
+    private func waitForWalkingStrategyLanding() async -> CGFloat? {
+        let startedAt = Date().timeIntervalSince1970
+        let minimumEnd = startedAt + 0.15
+        let deadline = startedAt + 0.45
+        var previousX: CGFloat?
+        var latestX: CGFloat?
+        var stableFrames = 0
+
+        while isRunning && !Task.isCancelled && Date().timeIntervalSince1970 < deadline {
+            if let player = try? await minimap.findPlayerPosition(
+                minArea: FollowHealNavigation.playerMarkerMinArea
+            ) {
+                latestX = player.x
+                if let previousX, abs(player.x - previousX) <= 0.75 {
+                    stableFrames += 1
+                } else {
+                    stableFrames = 1
+                }
+                previousX = player.x
+                if Date().timeIntervalSince1970 >= minimumEnd && stableFrames >= 2 {
+                    return player.x
+                }
+            } else {
+                previousX = nil
+                stableFrames = 0
+            }
+            await randomSleep(0.03...0.05)
+        }
+        return latestX
     }
 
     private func teleportTowardBase(
