@@ -245,6 +245,8 @@ final class LoungeWorker: ObservableObject {
             guard isRunning, !Task.isCancelled else { return }
             try await human.pressNamedKey("Enter")
             await randomSleep(0.18...0.42)
+            try await human.pressNamedKey("Delete")
+            await randomSleep(0.08...0.18)
             await human.typeText(message)
             await randomSleep(0.12...0.32)
             if let suffix {

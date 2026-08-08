@@ -362,6 +362,8 @@ final class RopePartyWorker: ObservableObject {
                 // The second Enter must be sent before another command can begin.
                 try await human.pressNamedKey("Enter")
                 await randomSleep(0.18...0.42)
+                try await human.pressNamedKey("Delete")
+                await randomSleep(0.08...0.18)
                 await human.typeText(command)
                 await randomSleep(0.12...0.32)
                 try await human.pressNamedKey("Enter")
