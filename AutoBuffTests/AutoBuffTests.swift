@@ -63,6 +63,36 @@ struct SettingsManagerTests {
         #expect(errors.isEmpty)
     }
 
+    @Test func followHealWalkingStrategyRequiresTeleportKeyForBoundaryRecovery() {
+        var settings = AppSettings.default
+        settings.healSkillKey = "Q"
+        settings.healAnchorX = 50
+        settings.teleportSkillKey = ""
+        settings.followHealReturnStrategy = .walk
+
+        let errors = WorkerConfigurationValidator.validationErrors(
+            settings: settings,
+            mode: .followHeal
+        )
+
+        #expect(errors == ["请设置瞬移技能键"])
+    }
+
+    @Test func followHealTeleportStrategyRequiresTeleportKey() {
+        var settings = AppSettings.default
+        settings.healSkillKey = "Q"
+        settings.healAnchorX = 50
+        settings.teleportSkillKey = ""
+        settings.followHealReturnStrategy = .teleport
+
+        let errors = WorkerConfigurationValidator.validationErrors(
+            settings: settings,
+            mode: .followHeal
+        )
+
+        #expect(errors == ["请设置瞬移技能键"])
+    }
+
     @Test func nonFollowHealStillRequiresAnEnabledBuff() {
         var settings = AppSettings.default
         settings.buffs = settings.buffs.map {
@@ -212,6 +242,7 @@ struct SettingsManagerTests {
         #expect(loaded.healAnchorX == 77)
         #expect(loaded.healAnchorY == 12)
         #expect(loaded.followHealBoundaryTolerance == 9.5)
+        #expect(loaded.followHealReturnStrategy == .walk)
         #expect(loaded.healMinimapRegion == CGRect(x: 8, y: 120, width: 164, height: 86))
     }
 
@@ -800,6 +831,25 @@ struct SettingsManagerTests {
         #expect(FollowHealNavigation.teleportDirectionToBase(currentX: 100, baseX: 100) == nil)
     }
 
+    @Test func followHealWalkingPlanTargetsTheExactBaseSide() {
+        #expect(FollowHealNavigation.walkingDirectionToBase(currentX: 99.5, baseX: 100) == .right)
+        #expect(FollowHealNavigation.walkingDirectionToBase(currentX: 100.5, baseX: 100) == .left)
+        #expect(FollowHealNavigation.walkingDirectionToBase(currentX: 100, baseX: 100) == nil)
+    }
+
+    @Test func followHealWalkingPlanStopsAtTheConfiguredBoundary() {
+        #expect(!FollowHealNavigation.isOutsideWalkingBoundary(
+            currentX: 106,
+            baseX: 100,
+            tolerance: 6
+        ))
+        #expect(FollowHealNavigation.isOutsideWalkingBoundary(
+            currentX: 106.1,
+            baseX: 100,
+            tolerance: 6
+        ))
+    }
+
     @Test func playerDetectionPrefersTheCandidateNearTheMarkedAnchor() {
         let width = 40
         let height = 20
@@ -863,6 +913,16 @@ struct SettingsManagerTests {
             let interval = FollowHealNavigation.nextCenterAdjustInterval()
             #expect(interval >= 4)
             #expect(interval <= 7)
+        }
+    }
+
+    @Test func followHealWalkingKeepaliveUsesHistoricalTiming() {
+        #expect(FollowHealNavigation.walkingKeepaliveDurationMS == 200...300)
+        #expect(FollowHealNavigation.walkingKeepaliveRecoveryRange == 0.08...0.22)
+        for _ in 0..<20 {
+            let interval = FollowHealNavigation.nextWalkingKeepaliveInterval()
+            #expect(interval >= 8)
+            #expect(interval <= 12)
         }
     }
 

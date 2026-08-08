@@ -63,6 +63,18 @@ enum MovementMode: String, Codable, CaseIterable {
     }
 }
 
+enum FollowHealReturnStrategy: String, Codable, CaseIterable {
+    case walk
+    case teleport
+
+    var label: String {
+        switch self {
+        case .walk: return "左右走防卡"
+        case .teleport: return "瞬移回位"
+        }
+    }
+}
+
 enum PreSkillMoveMode: String, Codable, CaseIterable {
     case rightLeft = "right_left"
     case leftOnly = "left_only"
@@ -78,7 +90,7 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 9
+    static let currentSchemaVersion = 10
     static let defaultMonitorServerBaseURL = "https://buff.juanwang.cc"
 
     var schemaVersion: Int = currentSchemaVersion
@@ -97,6 +109,7 @@ struct AppSettings: Codable, Equatable {
     var healAnchorX: Int? = nil
     var healAnchorY: Int? = nil
     var followHealBoundaryTolerance: Double = 6
+    var followHealReturnStrategy: FollowHealReturnStrategy = .walk
     var healMinimapRegionX: Int? = nil
     var healMinimapRegionY: Int? = nil
     var healMinimapRegionWidth: Int? = nil
@@ -145,6 +158,7 @@ extension AppSettings {
         case healAnchorX
         case healAnchorY
         case followHealBoundaryTolerance
+        case followHealReturnStrategy
         case healMinimapRegionX
         case healMinimapRegionY
         case healMinimapRegionWidth
@@ -204,6 +218,10 @@ extension AppSettings {
             Double.self,
             forKey: .followHealBoundaryTolerance
         ) ?? 6
+        self.followHealReturnStrategy = try container.decodeIfPresent(
+            FollowHealReturnStrategy.self,
+            forKey: .followHealReturnStrategy
+        ) ?? .walk
         self.healMinimapRegionX = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionX)
         self.healMinimapRegionY = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionY)
         self.healMinimapRegionWidth = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionWidth)
@@ -276,6 +294,7 @@ extension AppSettings {
         try container.encodeIfPresent(healAnchorX, forKey: .healAnchorX)
         try container.encodeIfPresent(healAnchorY, forKey: .healAnchorY)
         try container.encode(followHealBoundaryTolerance, forKey: .followHealBoundaryTolerance)
+        try container.encode(followHealReturnStrategy, forKey: .followHealReturnStrategy)
         try container.encodeIfPresent(healMinimapRegionX, forKey: .healMinimapRegionX)
         try container.encodeIfPresent(healMinimapRegionY, forKey: .healMinimapRegionY)
         try container.encodeIfPresent(healMinimapRegionWidth, forKey: .healMinimapRegionWidth)

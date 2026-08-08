@@ -4,6 +4,9 @@ import Foundation
 enum FollowHealNavigation {
     static let playerMarkerMinArea = 5
     static let centerAdjustIntervalRange: ClosedRange<TimeInterval> = 4...7
+    static let walkingKeepaliveIntervalRange: ClosedRange<TimeInterval> = 8...12
+    static let walkingKeepaliveDurationMS: ClosedRange<Int> = 200...300
+    static let walkingKeepaliveRecoveryRange: ClosedRange<TimeInterval> = 0.08...0.22
     static let healHoldRange: ClosedRange<TimeInterval> = 8...12
     static let healGapRange: ClosedRange<TimeInterval> = 0.25...0.60
     static let newCollisionDistance: CGFloat = 1
@@ -100,6 +103,30 @@ enum FollowHealNavigation {
         if currentX < baseX { return .right }
         if currentX > baseX { return .left }
         return nil
+    }
+
+    // The walking plan intentionally owns its boundary decision separately
+    // from the teleport plan so either behavior can change independently.
+    static func walkingDirectionToBase(currentX: CGFloat, baseX: CGFloat) -> HumanInput.Direction? {
+        if currentX < baseX { return .right }
+        if currentX > baseX { return .left }
+        return nil
+    }
+
+    static func isOutsideWalkingBoundary(
+        currentX: CGFloat,
+        baseX: CGFloat,
+        tolerance: CGFloat
+    ) -> Bool {
+        abs(currentX - baseX) > tolerance
+    }
+
+    static func walkingKeepaliveDirection(currentX: CGFloat, baseX: CGFloat) -> HumanInput.Direction {
+        walkingDirectionToBase(currentX: currentX, baseX: baseX) ?? .right
+    }
+
+    static func nextWalkingKeepaliveInterval() -> TimeInterval {
+        Double.random(in: walkingKeepaliveIntervalRange)
     }
 
     static func isOutsideAnchorBand(
@@ -240,8 +267,11 @@ final class FollowHealWorker: ObservableObject {
         log(
             "使用手动跟补基准点 X=\(format(baseX))，"
                 + "左右界限 ±\(format(boundaryTolerance))，"
-                + "提前保护 ±\(format(protectiveTolerance))"
+                + "回位方案：\(settings.followHealReturnStrategy.label)"
         )
+        if settings.followHealReturnStrategy == .teleport {
+            log("瞬移提前保护 ±\(format(protectiveTolerance))")
+        }
         if let savedRegion = settings.healMinimapRegion {
             minimap.clearMinimapRegion()
             minimap.setMinimapRegion(savedRegion)
@@ -262,6 +292,8 @@ final class FollowHealWorker: ObservableObject {
 
         var nextCast: [Int: TimeInterval] = [:]
         var nextCenterAdjustAt = Date().timeIntervalSince1970 + FollowHealNavigation.nextCenterAdjustInterval()
+        var nextWalkingKeepaliveAt = Date().timeIntervalSince1970
+            + FollowHealNavigation.nextWalkingKeepaliveInterval()
         var excursionGuard = FollowHealNavigation.TeleportExcursionGuard()
 
         while isRunning && !Task.isCancelled {
@@ -289,12 +321,14 @@ final class FollowHealWorker: ObservableObject {
                 await performContinuousHealCycle(
                     healKey: settings.healSkillKey,
                     teleportKey: settings.teleportSkillKey,
+                    returnStrategy: settings.followHealReturnStrategy,
                     baseX: baseX,
                     boundaryTolerance: protectiveTolerance,
                     nearAnchorTolerance: boundaryTolerance,
                     buffs: buffs,
                     nextCast: &nextCast,
                     nextCenterAdjustAt: &nextCenterAdjustAt,
+                    nextWalkingKeepaliveAt: &nextWalkingKeepaliveAt,
                     excursionGuard: &excursionGuard,
                     windowID: windowID
                 )
@@ -309,12 +343,14 @@ final class FollowHealWorker: ObservableObject {
             await performContinuousHealCycle(
                 healKey: settings.healSkillKey,
                 teleportKey: settings.teleportSkillKey,
+                returnStrategy: settings.followHealReturnStrategy,
                 baseX: baseX,
                 boundaryTolerance: protectiveTolerance,
                 nearAnchorTolerance: boundaryTolerance,
                 buffs: buffs,
                 nextCast: &nextCast,
                 nextCenterAdjustAt: &nextCenterAdjustAt,
+                nextWalkingKeepaliveAt: &nextWalkingKeepaliveAt,
                 excursionGuard: &excursionGuard,
                 windowID: windowID
             )
@@ -326,12 +362,14 @@ final class FollowHealWorker: ObservableObject {
     private func performContinuousHealCycle(
         healKey: String,
         teleportKey: String,
+        returnStrategy: FollowHealReturnStrategy,
         baseX: CGFloat,
         boundaryTolerance: CGFloat,
         nearAnchorTolerance: CGFloat,
         buffs: [BuffConfig],
         nextCast: inout [Int: TimeInterval],
         nextCenterAdjustAt: inout TimeInterval,
+        nextWalkingKeepaliveAt: inout TimeInterval,
         excursionGuard: inout FollowHealNavigation.TeleportExcursionGuard,
         windowID: CGWindowID
     ) async {
@@ -368,6 +406,37 @@ final class FollowHealWorker: ObservableObject {
                 missingPlayerCount = 0
                 logPlayerCoordinateIfDue(player, baseX: baseX, phase: "持续补血")
                 let now = Date().timeIntervalSince1970
+                if returnStrategy == .walk,
+                   FollowHealNavigation.isOutsideWalkingBoundary(
+                       currentX: player.x,
+                       baseX: baseX,
+                       tolerance: nearAnchorTolerance
+                   ) {
+                    await human.releaseKey(healKeyCode)
+                    await teleportBackForWalkingStrategy(
+                        currentX: player.x,
+                        baseX: baseX,
+                        teleportKey: teleportKey
+                    )
+                    return
+                }
+                if returnStrategy == .walk {
+                    if now >= nextWalkingKeepaliveAt {
+                        await human.releaseKey(healKeyCode)
+                        await walkForSkillKeepalive(
+                            currentX: player.x,
+                            baseX: baseX,
+                            buffs: buffs,
+                            nextCast: &nextCast,
+                            windowID: windowID
+                        )
+                        nextWalkingKeepaliveAt = Date().timeIntervalSince1970
+                            + FollowHealNavigation.nextWalkingKeepaliveInterval()
+                        return
+                    }
+                    await randomSleep(0.035...0.065)
+                    continue
+                }
                 let isNewExcursion = excursionGuard.shouldCorrect(
                     currentX: player.x,
                     baseX: baseX,
@@ -425,6 +494,60 @@ final class FollowHealWorker: ObservableObject {
         await human.releaseKey(healKeyCode)
         if isRunning && !Task.isCancelled {
             await randomSleep(FollowHealNavigation.healGapRange)
+        }
+    }
+
+    private func walkForSkillKeepalive(
+        currentX: CGFloat,
+        baseX: CGFloat,
+        buffs: [BuffConfig],
+        nextCast: inout [Int: TimeInterval],
+        windowID: CGWindowID
+    ) async {
+        let direction = FollowHealNavigation.walkingKeepaliveDirection(
+            currentX: currentX,
+            baseX: baseX
+        )
+        log("防卡技能小走：当前X=\(format(currentX))，向\(direction == .left ? "左" : "右")走")
+        if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) {
+            return
+        }
+        guard await ensureGameFocus(windowID: windowID, reason: "防卡技能小走") else {
+            return
+        }
+        if direction == .left {
+            await human.moveLeft()
+        } else {
+            await human.moveRight()
+        }
+        await sleep(Double(Int.random(in: FollowHealNavigation.walkingKeepaliveDurationMS)) / 1_000)
+        await human.stopMove()
+        await randomSleep(FollowHealNavigation.walkingKeepaliveRecoveryRange)
+    }
+
+    private func teleportBackForWalkingStrategy(
+        currentX: CGFloat,
+        baseX: CGFloat,
+        teleportKey: String
+    ) async {
+        guard let direction = FollowHealNavigation.walkingDirectionToBase(
+            currentX: currentX,
+            baseX: baseX
+        ) else { return }
+        log("左右走防卡越界：当前X=\(format(currentX))，使用一次瞬移回安全区")
+        do {
+            try await human.performDirectionalSkill(
+                direction,
+                skillKey: teleportKey,
+                directionLeadMS: Int.random(in: 35...75),
+                skillHoldMS: Int.random(in: 50...110),
+                directionReleaseDelayMS: Int.random(in: 25...65)
+            )
+            await randomSleep(0.15...0.25)
+        } catch is CancellationError {
+            return
+        } catch {
+            onError?("瞬移键错误: \(error.localizedDescription)")
         }
     }
 

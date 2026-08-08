@@ -372,6 +372,19 @@ struct SettingsSectionView: View {
 
             Divider().frame(height: 44)
 
+            optionColumn("回位方案") {
+                Picker("回位方案", selection: $viewModel.settings.followHealReturnStrategy) {
+                    ForEach(FollowHealReturnStrategy.allCases, id: \.self) { strategy in
+                        Text(strategy.label).tag(strategy)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 94)
+            }
+
+            Divider().frame(height: 44)
+
             optionColumn("瞬移技能键") {
                 Button(viewModel.settings.teleportSkillKey.isEmpty ? "选键" : viewModel.settings.teleportSkillKey) {
                     viewModel.openKeyboard(for: .teleportSkillKey)
