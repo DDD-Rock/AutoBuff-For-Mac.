@@ -904,7 +904,12 @@ final class MainViewModel: ObservableObject {
                         return
                     }
                 }
-                ropePartyWorker.disbandBossParty(cycleID: cycleID, windowID: window.windowID)
+                ropePartyWorker.disbandBossParty(
+                    cycleID: cycleID,
+                    phase: command.action == "restart_party_and_buff" ? "before_buff" : "after_buff",
+                    roleNames: command.inviteRoleNames,
+                    windowID: window.windowID
+                )
             case "prepare_for_rebuild":
                 appendLog("队长正在重新组队，本机等待新的组队邀请")
             default:

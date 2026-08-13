@@ -22,6 +22,7 @@ final class RopePartyWorker: ObservableObject {
     private var task: Task<Void, Never>?
     private var runID = UUID()
     private var pendingCommands: [String] = []
+    private var pendingRebuilds: [(cycleID: Int64, roleNames: [String])] = []
     private var configuredBuffs: [BuffConfig] = []
     private var buffDeadlines: [Int: TimeInterval] = [:]
     private var nextBuffDueReportAt: TimeInterval = 0
@@ -35,7 +36,7 @@ final class RopePartyWorker: ObservableObject {
     private var bossJoinDetectedCycleID: Int64?
     private var nextBossJoinedReportAt: TimeInterval = 0
     private var latestBossBuffCycleID: Int64 = 0
-    private var latestBossDisbandCycleID: Int64 = 0
+    private var processedRebuildKeys: Set<String> = []
     private var pendingBossInviteStart: (cycleID: Int64, roleName: String)?
     private var pendingBossBuffCycleID: Int64?
     private(set) var isRunning = false
@@ -70,10 +71,11 @@ final class RopePartyWorker: ObservableObject {
         task?.cancel()
         task = nil
         pendingCommands = []
+        pendingRebuilds = []
         activeBossCycleID = nil
         bossJoinDetectedCycleID = nil
         latestBossBuffCycleID = 0
-        latestBossDisbandCycleID = 0
+        processedRebuildKeys = []
         pendingBossInviteStart = nil
         pendingBossBuffCycleID = nil
         countdownPublisher.stop()
@@ -154,11 +156,13 @@ final class RopePartyWorker: ObservableObject {
         log("收到老板进队广播，准备强制释放全部已勾选 BUFF")
     }
 
-    func disbandBossParty(cycleID: Int64, windowID: CGWindowID) {
+    func disbandBossParty(cycleID: Int64, phase: String, roleNames: [String], windowID: CGWindowID) {
         guard isRunning, cycleID > 0 else { return }
-        guard cycleID > latestBossDisbandCycleID else { return }
-        latestBossDisbandCycleID = cycleID
-        pendingCommands.append("__boss_cycle_disband__\(cycleID)")
+        let rebuildKey = "\(cycleID):\(phase)"
+        guard !processedRebuildKeys.contains(rebuildKey) else { return }
+        let normalizedRoleNames = roleNames.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        processedRebuildKeys.insert(rebuildKey)
+        pendingRebuilds.append((cycleID: cycleID, roleNames: normalizedRoleNames))
     }
 
     private func finishOneShot(runID currentRunID: UUID) {
@@ -201,18 +205,18 @@ final class RopePartyWorker: ObservableObject {
                     onBossBuffsCompleted?(cycleID)
                 }
             }
+            if !pendingRebuilds.isEmpty {
+                let rebuild = pendingRebuilds.removeFirst()
+                guard await sendChatCommand("/退出隊伍", windowID: windowID) else { break }
+                log("老板 BUFF 周期完成，已发送解散队伍指令：/退出隊伍")
+                await randomSleep(0.8...1.4)
+                if await createPartyAndInvite(roleNames: rebuild.roleNames, windowID: windowID, includeExit: false) {
+                    onPartyRebuildCommandsFinished?(rebuild.cycleID)
+                }
+                continue
+            }
             if !pendingCommands.isEmpty {
                 let command = pendingCommands.removeFirst()
-                if command.hasPrefix("__boss_cycle_disband__"),
-                   let cycleID = Int64(command.dropFirst("__boss_cycle_disband__".count)) {
-                    guard await sendChatCommand("/退出隊伍", windowID: windowID) else { break }
-                    log("老板 BUFF 周期完成，已发送解散队伍指令：/退出隊伍")
-                    await randomSleep(0.8...1.4)
-                    if await createPartyAndInvite(roleNames: settings.ropePartyInviteRoleNames, windowID: windowID, includeExit: false) {
-                        onPartyRebuildCommandsFinished?(cycleID)
-                    }
-                    continue
-                }
                 guard await sendChatCommand(command, windowID: windowID) else { break }
                 log("已发送移除成员指令：\(command)")
             }
@@ -237,7 +241,9 @@ final class RopePartyWorker: ObservableObject {
             guard await sendChatCommand(command, windowID: windowID) else { return false }
             log("已发送队伍指令：\(command)")
             if index < commands.count - 1 {
-                await randomSleep(0.55...1.15)
+                // The game has no acknowledgement for chat commands. Give the
+                // party state enough time to settle before the next invite.
+                await randomSleep(command == "/建立隊伍" ? 1.5...2.2 : 1.0...1.6)
             }
         }
         log("首次建队指令已发送完毕")
