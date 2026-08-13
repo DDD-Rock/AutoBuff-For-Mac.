@@ -72,22 +72,24 @@ final class PartyInviteWorker: ObservableObject {
     }
 
     private func acceptInvite(at initialPoint: CGPoint, windowID: CGWindowID) async {
-        onLog?("检测到队伍邀请，自动同意")
-        if !windowSelector.bringWindowToFront(windowID: windowID) {
-            onLog?("⚠️ 无法将游戏窗口置于前台，仍会尝试同意组队")
-        }
-        await sleep(0.15)
-
-        await human.clickAt(screenPoint: initialPoint, offsetRange: 2)
-        for _ in 0..<14 where isRunning && !Task.isCancelled {
-            await sleep(0.15)
-            if (try? await detector.findAcceptButtonScreenPoint()) == nil {
-                onLog?("已同意队伍邀请")
-                onInviteAccepted?()
-                return
+        await ChatInputTransactionCoordinator.shared.withTransaction {
+            onLog?("检测到队伍邀请，自动同意")
+            if !windowSelector.bringWindowToFront(windowID: windowID) {
+                onLog?("⚠️ 无法将游戏窗口置于前台，仍会尝试同意组队")
             }
+            await sleep(0.15)
+
+            await human.clickAt(screenPoint: initialPoint, offsetRange: 2)
+            for _ in 0..<14 where isRunning && !Task.isCancelled {
+                await sleep(0.15)
+                if (try? await detector.findAcceptButtonScreenPoint()) == nil {
+                    onLog?("已同意队伍邀请")
+                    onInviteAccepted?()
+                    return
+                }
+            }
+            onLog?("邀请弹窗点击后仍未消失，本次不报告入队成功")
         }
-        onLog?("邀请弹窗点击后仍未消失，本次不报告入队成功")
     }
 
     private func sleep(_ seconds: Double) async {

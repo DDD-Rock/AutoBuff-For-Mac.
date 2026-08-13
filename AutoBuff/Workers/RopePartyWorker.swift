@@ -8,14 +8,12 @@ final class RopePartyWorker: ObservableObject {
     var onCountdown: (([Int: Int]) -> Void)?
     var onError: ((String) -> Void)?
     var onStopped: (() -> Void)?
-    var onTeamCreated: (() -> Void)?
-    var onInvitationSent: ((String) -> Void)?
     var onTeamDisbanded: ((Int64) -> Void)?
     var onBuffDue: (() -> Void)?
     var onBossJoined: ((Int64) -> Void)?
     var onBossBuffsCompleted: ((Int64) -> Void)?
-    var onBossKicked: ((Int64) -> Void)?
-    var onBossCycleDisbanded: ((Int64) -> Void)?
+    var onPartyCommandsFinished: (() -> Void)?
+    var onPartyRebuildCommandsFinished: ((Int64) -> Void)?
 
     private let human = HumanInput()
     private let windowSelector = WindowSelector()
@@ -40,7 +38,6 @@ final class RopePartyWorker: ObservableObject {
     private var latestBossDisbandCycleID: Int64 = 0
     private var pendingBossInviteStart: (cycleID: Int64, roleName: String)?
     private var pendingBossBuffCycleID: Int64?
-    private var pendingBossKick: (cycleID: Int64, roleName: String)?
     private(set) var isRunning = false
 
     func start(settings: AppSettings, windowID: CGWindowID, firstCreation: Bool) {
@@ -79,7 +76,6 @@ final class RopePartyWorker: ObservableObject {
         latestBossDisbandCycleID = 0
         pendingBossInviteStart = nil
         pendingBossBuffCycleID = nil
-        pendingBossKick = nil
         countdownPublisher.stop()
         Task { await human.releaseAll() }
     }
@@ -158,11 +154,6 @@ final class RopePartyWorker: ObservableObject {
         log("收到老板进队广播，准备强制释放全部已勾选 BUFF")
     }
 
-    func kickBoss(cycleID: Int64, roleName: String) {
-        guard isRunning, cycleID > 0, !roleName.isEmpty else { return }
-        pendingBossKick = (cycleID, roleName)
-    }
-
     func disbandBossParty(cycleID: Int64, windowID: CGWindowID) {
         guard isRunning, cycleID > 0 else { return }
         guard cycleID > latestBossDisbandCycleID else { return }
@@ -185,10 +176,10 @@ final class RopePartyWorker: ObservableObject {
     ) async {
         log("神殿模式 · 挂绳组队启动...")
         if settings.ropePartyIsLeader && firstCreation {
-            await createPartyAndInvite(
+            if await createPartyAndInvite(
                 roleNames: settings.ropePartyInviteRoleNames,
                 windowID: windowID
-            )
+            ) { onPartyCommandsFinished?() }
         } else if settings.ropePartyIsLeader {
             log("队长客户端已启动；本次为修改队伍，不重复发送建队邀请")
         } else {
@@ -210,22 +201,16 @@ final class RopePartyWorker: ObservableObject {
                     onBossBuffsCompleted?(cycleID)
                 }
             }
-            if let kick = pendingBossKick {
-                pendingBossKick = nil
-                let command = "/踢出隊伍 \(kick.roleName)"
-                guard await sendChatCommand(command, windowID: windowID) else { break }
-                log("已发送老板踢出指令：\(command)")
-                onBossKicked?(kick.cycleID)
-            }
             if !pendingCommands.isEmpty {
                 let command = pendingCommands.removeFirst()
                 if command.hasPrefix("__boss_cycle_disband__"),
                    let cycleID = Int64(command.dropFirst("__boss_cycle_disband__".count)) {
                     guard await sendChatCommand("/退出隊伍", windowID: windowID) else { break }
                     log("老板 BUFF 周期完成，已发送解散队伍指令：/退出隊伍")
-                    onBossCycleDisbanded?(cycleID)
                     await randomSleep(0.8...1.4)
-                    await createPartyAndInvite(roleNames: settings.ropePartyInviteRoleNames, windowID: windowID)
+                    if await createPartyAndInvite(roleNames: settings.ropePartyInviteRoleNames, windowID: windowID, includeExit: false) {
+                        onPartyRebuildCommandsFinished?(cycleID)
+                    }
                     continue
                 }
                 guard await sendChatCommand(command, windowID: windowID) else { break }
@@ -244,24 +229,19 @@ final class RopePartyWorker: ObservableObject {
         onStopped?()
     }
 
-    private func createPartyAndInvite(roleNames: [String], windowID: CGWindowID) async {
+    private func createPartyAndInvite(roleNames: [String], windowID: CGWindowID, includeExit: Bool = true) async -> Bool {
         log("首次创建队伍，开始发送建队指令")
-        var commands = ["/退出隊伍", "/建立隊伍"]
+        var commands = includeExit ? ["/退出隊伍", "/建立隊伍"] : ["/建立隊伍"]
         commands.append(contentsOf: roleNames.map { "/邀請組隊 \($0)" })
         for (index, command) in commands.enumerated() where isRunning && !Task.isCancelled {
-            guard await sendChatCommand(command, windowID: windowID) else { return }
+            guard await sendChatCommand(command, windowID: windowID) else { return false }
             log("已发送队伍指令：\(command)")
-            if command == "/建立隊伍" {
-                onTeamCreated?()
-            } else if command.hasPrefix("/邀請組隊 ") {
-                let roleName = String(command.dropFirst("/邀請組隊 ".count))
-                onInvitationSent?(roleName)
-            }
             if index < commands.count - 1 {
                 await randomSleep(0.55...1.15)
             }
         }
         log("首次建队指令已发送完毕")
+        return true
     }
 
     private func processBossInviteCycle(windowID: CGWindowID) async {
@@ -284,8 +264,8 @@ final class RopePartyWorker: ObservableObject {
         if bossJoinDetectedCycleID == cycleID {
             if now >= nextBossJoinedReportAt {
                 onBossJoined?(cycleID)
-                log("等待服务器确认老板进队，已重新上报周期 \(cycleID)")
-                nextBossJoinedReportAt = now + 2
+                log("已上报老板进队，等待服务端下发放 BUFF")
+                activeBossCycleID = nil
             }
             return
         }
@@ -311,7 +291,7 @@ final class RopePartyWorker: ObservableObject {
             log("老板邀请前橙点基线：\(count)")
             return
         }
-        guard count != bossOrangeBaseline else { return }
+        guard let baseline = bossOrangeBaseline, count > baseline else { return }
         log("橙点数量由 \(bossOrangeBaseline ?? 0) 变为 \(count)，判定老板已进队")
         bossJoinDetectedCycleID = cycleID
         nextBossJoinedReportAt = 0
@@ -321,8 +301,7 @@ final class RopePartyWorker: ObservableObject {
         guard !configuredBuffs.isEmpty else { return }
         guard pendingBossInviteStart == nil,
               activeBossCycleID == nil,
-              pendingBossBuffCycleID == nil,
-              pendingBossKick == nil else { return }
+              pendingBossBuffCycleID == nil else { return }
         let now = Date().timeIntervalSince1970
         let minimumRemaining = configuredBuffs.compactMap { buff in
             buffDeadlines[buff.id].map { $0 - now }
@@ -333,30 +312,32 @@ final class RopePartyWorker: ObservableObject {
     }
 
     private func castAllConfiguredBuffs(windowID: CGWindowID) async -> Bool {
-        if configuredBuffs.isEmpty {
+        await ChatInputTransactionCoordinator.shared.withTransaction {
+            if configuredBuffs.isEmpty {
+                return true
+            }
+            guard await ensureGameFocus(windowID: windowID) else { return false }
+            for (index, buff) in configuredBuffs.enumerated() {
+                guard isRunning, !Task.isCancelled else { return false }
+                do {
+                    try await human.pressNamedKey(buff.key)
+                    await randomSleep(0.1...0.3)
+                    try await human.pressNamedKey(buff.key)
+                    log("老板进队触发，已释放 BUFF：\(buff.key)")
+                } catch {
+                    onError?("强制释放 BUFF \(buff.key) 失败：\(error.localizedDescription)")
+                }
+                if index < configuredBuffs.count - 1 {
+                    await randomSleep(2.0...3.0)
+                }
+            }
+            guard isRunning, !Task.isCancelled else { return false }
+            let now = Date().timeIntervalSince1970
+            buffDeadlines = Dictionary(uniqueKeysWithValues: configuredBuffs.map { ($0.id, now + $0.duration) })
+            countdownPublisher.replaceDeadlines(buffDeadlines, now: now)
+            nextBuffDueReportAt = 0
             return true
         }
-        guard await ensureGameFocus(windowID: windowID) else { return false }
-        for (index, buff) in configuredBuffs.enumerated() {
-            guard isRunning, !Task.isCancelled else { return false }
-            do {
-                try await human.pressNamedKey(buff.key)
-                await randomSleep(0.1...0.3)
-                try await human.pressNamedKey(buff.key)
-                log("老板进队触发，已释放 BUFF：\(buff.key)")
-            } catch {
-                onError?("强制释放 BUFF \(buff.key) 失败：\(error.localizedDescription)")
-            }
-            if index < configuredBuffs.count - 1 {
-                await randomSleep(2.0...3.0)
-            }
-        }
-        guard isRunning, !Task.isCancelled else { return false }
-        let now = Date().timeIntervalSince1970
-        buffDeadlines = Dictionary(uniqueKeysWithValues: configuredBuffs.map { ($0.id, now + $0.duration) })
-        countdownPublisher.replaceDeadlines(buffDeadlines, now: now)
-        nextBuffDueReportAt = 0
-        return true
     }
 
     private func sendChatCommand(_ command: String, windowID: CGWindowID) async -> Bool {

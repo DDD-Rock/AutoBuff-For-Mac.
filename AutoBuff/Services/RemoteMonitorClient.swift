@@ -469,20 +469,7 @@ final class RemoteMonitorClient {
     }
 
     func publishTeamJoined(teamID: Int64, roleName: String) {
-        pendingTeamJoined = RemoteTeamJoinedPayload(
-            teamId: teamID,
-            roleName: roleName,
-            receiptId: UUID().uuidString
-        )
-        resendPendingTeamJoined()
-        teamJoinedRetryTask?.cancel()
-        teamJoinedRetryTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard let self, pendingTeamJoined != nil else { return }
-                resendPendingTeamJoined()
-            }
-        }
+        publishRopePartyProgress(teamID: teamID, event: "team_joined")
     }
 
     private func resendPendingTeamJoined() {
@@ -500,10 +487,7 @@ final class RemoteMonitorClient {
         roleName: String? = nil
     ) {
         guard publisherEnabled else { return }
-        let reliableEvents: Set<String> = [
-            "team_created", "invitation_sent", "team_disbanded",
-            "buff_completed", "boss_cycle_disbanded"
-        ]
+        let reliableEvents: Set<String> = []
         let receiptID = reliableEvents.contains(event) ? UUID().uuidString : nil
         let payload = RemoteRopePartyProgressPayload(
             teamId: teamID,
