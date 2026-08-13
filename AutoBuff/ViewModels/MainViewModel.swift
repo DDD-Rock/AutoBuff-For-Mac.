@@ -899,6 +899,10 @@ final class MainViewModel: ObservableObject {
                     settings.mode = .temple
                     settings.templeFunction = .ropeParty
                     startWorker()
+                    guard ropePartyWorker.isRunning else {
+                        appendLog("重新组队失败：挂绳组队未能启动，请检查游戏窗口和权限")
+                        return
+                    }
                 }
                 ropePartyWorker.disbandBossParty(cycleID: cycleID, windowID: window.windowID)
             case "prepare_for_rebuild":
