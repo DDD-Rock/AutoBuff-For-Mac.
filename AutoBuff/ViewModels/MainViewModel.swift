@@ -93,6 +93,7 @@ final class MainViewModel: ObservableObject {
     private let loungeWorker = LoungeWorker()
     private let ropePartyWorker = RopePartyWorker()
     private let followHealWorker = FollowHealWorker()
+    private let followHealWalkingWorker = FollowHealWalkingWorker()
     private let partyInviteWorker = PartyInviteWorker()
     private let monitoringSession = MonitoringSession()
     private let remoteMonitorClient = RemoteMonitorClient()
@@ -333,7 +334,11 @@ final class MainViewModel: ObservableObject {
             }
         case .followHeal:
             activeWorker = .followHeal
-            followHealWorker.start(settings: settings, windowID: window.windowID)
+            if settings.followHealReturnStrategy == .leftRight {
+                followHealWalkingWorker.start(settings: settings, windowID: window.windowID)
+            } else {
+                followHealWorker.start(settings: settings, windowID: window.windowID)
+            }
             appendLog("跟补模式已启动")
         case .monitor:
             activeWorker = .monitor
@@ -357,6 +362,7 @@ final class MainViewModel: ObservableObject {
         loungeWorker.stop()
         ropePartyWorker.stop()
         followHealWorker.stop()
+        followHealWalkingWorker.stop()
         monitoringSession.stop()
         isRunning = false
         countdowns = [:]
@@ -1020,6 +1026,12 @@ final class MainViewModel: ObservableObject {
         followHealWorker.onStopped = { [weak self] in
             self?.handleWorkerStopped(.followHeal)
         }
+        followHealWalkingWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
+        followHealWalkingWorker.onCountdown = { [weak self] info in self?.countdowns = info }
+        followHealWalkingWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
+        followHealWalkingWorker.onStopped = { [weak self] in
+            self?.handleWorkerStopped(.followHeal)
+        }
 
         partyInviteWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         partyInviteWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
@@ -1410,12 +1422,14 @@ enum WorkerConfigurationValidator {
             } else if KeyCodeMap.virtualKeyCode(for: settings.healSkillKey) == nil {
                 errors.append("加血技能键“\(settings.healSkillKey)”不受支持")
             }
-            if settings.teleportSkillKey.isEmpty {
-                errors.append("请设置瞬移技能键")
-            } else if KeyCodeMap.virtualKeyCode(for: settings.teleportSkillKey) == nil {
-                errors.append("瞬移技能键“\(settings.teleportSkillKey)”不受支持")
-            } else if settings.teleportSkillKey == settings.healSkillKey {
-                errors.append("瞬移技能键不能与加血技能键相同")
+            if settings.followHealReturnStrategy != .leftRight {
+                if settings.teleportSkillKey.isEmpty {
+                    errors.append("请设置瞬移技能键")
+                } else if KeyCodeMap.virtualKeyCode(for: settings.teleportSkillKey) == nil {
+                    errors.append("瞬移技能键“\(settings.teleportSkillKey)”不受支持")
+                } else if settings.teleportSkillKey == settings.healSkillKey {
+                    errors.append("瞬移技能键不能与加血技能键相同")
+                }
             }
             if settings.healAnchorX == nil {
                 errors.append("请先标记跟补基准点")

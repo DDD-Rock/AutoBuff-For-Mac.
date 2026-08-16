@@ -63,6 +63,22 @@ struct SettingsManagerTests {
         #expect(errors.isEmpty)
     }
 
+    @Test func followHealLeftRightModeDoesNotRequireTeleportKey() {
+        var settings = AppSettings.default
+        settings.healSkillKey = "Q"
+        settings.teleportSkillKey = ""
+        settings.healAnchorX = 50
+        settings.followHealReturnStrategy = .leftRight
+
+        let errors = WorkerConfigurationValidator.validationErrors(
+            settings: settings,
+            mode: .followHeal
+        )
+
+        #expect(errors.isEmpty)
+        #expect(FollowHealReturnStrategy.leftRight.label == "左右走模式")
+    }
+
     @Test func followHealWalkingStrategyRequiresTeleportKeyForBoundaryRecovery() {
         var settings = AppSettings.default
         settings.healSkillKey = "Q"

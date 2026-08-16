@@ -391,6 +391,7 @@ struct SettingsSectionView: View {
                 }
                 .controlSize(.small)
                 .frame(width: 58)
+                .disabled(viewModel.settings.followHealReturnStrategy == .leftRight)
             }
 
             Divider().frame(height: 44)

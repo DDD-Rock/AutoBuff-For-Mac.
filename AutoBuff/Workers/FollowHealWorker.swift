@@ -561,7 +561,7 @@ final class FollowHealWorker: ObservableObject {
                 baseX: baseX
             ) else { return }
             log(
-                "左右走防卡越界：当前X=\(format(latestX))，"
+                "混合模式越界：当前X=\(format(latestX))，"
                     + "第 \(attempt) 次朝标记点方向瞬移"
             )
             do {

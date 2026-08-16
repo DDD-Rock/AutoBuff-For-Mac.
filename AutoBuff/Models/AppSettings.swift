@@ -66,11 +66,13 @@ enum MovementMode: String, Codable, CaseIterable {
 enum FollowHealReturnStrategy: String, Codable, CaseIterable {
     case walk
     case teleport
+    case leftRight = "left_right"
 
     var label: String {
         switch self {
-        case .walk: return "左右走防卡"
+        case .walk: return "混合模式"
         case .teleport: return "瞬移回位"
+        case .leftRight: return "左右走模式"
         }
     }
 }
