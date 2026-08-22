@@ -251,10 +251,17 @@ private struct RemoteTeamJoinedPayload: Encodable {
 
 private struct RemoteRopePartyProgressPayload: Encodable {
     let teamId: Int64
-    let cycleId: Int64?
+    let eventId: String?
+    let messageId: String?
     let event: String
     let roleName: String?
-    let receiptId: String?
+}
+
+private struct PendingRopeProgress {
+    let payload: RemoteRopePartyProgressPayload
+    let dedupeKey: String
+    let retryInterval: TimeInterval
+    var nextRetryAt: Date
 }
 
 struct RemoteClientCommand {
@@ -266,6 +273,7 @@ struct RemoteClientCommand {
     let roleName: String?
     let targetRoleName: String?
     let cycleId: Int64?
+    let eventId: String?
     let inviteRoleNames: [String]
 }
 
@@ -276,6 +284,9 @@ private struct RemoteServerMessage: Decodable {
     let roleName: String?
     let targetRoleName: String?
     let cycleId: Int64?
+    let eventId: String?
+    let event: String?
+    let messageId: String?
     let receiptId: String?
     let action: String?
     let reason: String?
@@ -331,7 +342,7 @@ final class RemoteMonitorClient {
     private var pendingControlMessages: [Data] = []
     private var pendingTeamJoined: RemoteTeamJoinedPayload?
     private var teamJoinedRetryTask: Task<Void, Never>?
-    private var pendingRopeProgress: [String: RemoteRopePartyProgressPayload] = [:]
+    private var pendingRopeProgress: [String: PendingRopeProgress] = [:]
     private var ropeProgressRetryTask: Task<Void, Never>?
     private var pendingFrameMessage: Data?
     private var pendingEXPMessage: Data?
@@ -468,8 +479,8 @@ final class RemoteMonitorClient {
         )
     }
 
-    func publishTeamJoined(teamID: Int64, roleName: String) {
-        publishRopePartyProgress(teamID: teamID, event: "team_joined")
+    func publishTeamJoined(teamID: Int64, roleName: String, eventID: String? = nil) {
+        publishRopePartyProgress(teamID: teamID, eventID: eventID, event: "team_joined")
     }
 
     private func resendPendingTeamJoined() {
@@ -482,22 +493,38 @@ final class RemoteMonitorClient {
 
     func publishRopePartyProgress(
         teamID: Int64,
-        cycleID: Int64? = nil,
+        eventID: String? = nil,
         event: String,
         roleName: String? = nil
     ) {
         guard publisherEnabled else { return }
-        let reliableEvents: Set<String> = []
-        let receiptID = reliableEvents.contains(event) ? UUID().uuidString : nil
+        let reliableEvents: Set<String> = [
+            "party_commands_finished", "team_joined", "buff_due",
+            "invite_boss_ack", "boss_joined", "cast_buffs_ack",
+            "buff_finished", "all_buffs_finished_ack",
+            "rebuild_command_ack", "rebuild_finished"
+        ]
+        let normalizedEventID = eventID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let dedupeKey = "\(teamID):\(event):\(normalizedEventID ?? "")"
+        if reliableEvents.contains(event), pendingRopeProgress.values.contains(where: { $0.dedupeKey == dedupeKey }) {
+            return
+        }
+        let messageID = reliableEvents.contains(event) ? UUID().uuidString : nil
         let payload = RemoteRopePartyProgressPayload(
             teamId: teamID,
-            cycleId: cycleID,
+            eventId: normalizedEventID?.isEmpty == false ? normalizedEventID : nil,
+            messageId: messageID,
             event: event,
-            roleName: roleName,
-            receiptId: receiptID
+            roleName: roleName
         )
-        if let receiptID {
-            pendingRopeProgress[receiptID] = payload
+        if let messageID {
+            let interval: TimeInterval = ["buff_due", "boss_joined"].contains(event) ? 5 : 3
+            pendingRopeProgress[messageID] = PendingRopeProgress(
+                payload: payload,
+                dedupeKey: dedupeKey,
+                retryInterval: interval,
+                nextRetryAt: Date().addingTimeInterval(interval)
+            )
             startRopeProgressRetryTaskIfNeeded()
         }
         guard socket != nil else { return }
@@ -506,8 +533,8 @@ final class RemoteMonitorClient {
 
     private func resendPendingRopeProgress() {
         guard socket != nil else { return }
-        for payload in pendingRopeProgress.values {
-            send(type: "rope_party_progress", payload: payload)
+        for pending in pendingRopeProgress.values {
+            send(type: "rope_party_progress", payload: pending.payload)
         }
         startRopeProgressRetryTaskIfNeeded()
     }
@@ -516,13 +543,21 @@ final class RemoteMonitorClient {
         guard !pendingRopeProgress.isEmpty, ropeProgressRetryTask == nil else { return }
         ropeProgressRetryTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(1))
                 guard let self else { return }
                 if pendingRopeProgress.isEmpty {
                     ropeProgressRetryTask = nil
                     return
                 }
-                resendPendingRopeProgress()
+                guard socket != nil else { continue }
+                let now = Date()
+                let due = pendingRopeProgress.filter { $0.value.nextRetryAt <= now }
+                for (messageID, pending) in due {
+                    send(type: "rope_party_progress", payload: pending.payload)
+                    var updated = pending
+                    updated.nextRetryAt = now.addingTimeInterval(pending.retryInterval)
+                    pendingRopeProgress[messageID] = updated
+                }
             }
         }
     }
@@ -848,6 +883,14 @@ final class RemoteMonitorClient {
                 }
                 return
             }
+            if action == "rope_event_ack", let messageID = decoded.messageId {
+                pendingRopeProgress.removeValue(forKey: messageID)
+                if pendingRopeProgress.isEmpty {
+                    ropeProgressRetryTask?.cancel()
+                    ropeProgressRetryTask = nil
+                }
+                return
+            }
             onCommand?(
                 RemoteClientCommand(
                     action: action,
@@ -858,6 +901,7 @@ final class RemoteMonitorClient {
                     roleName: decoded.roleName,
                     targetRoleName: decoded.targetRoleName,
                     cycleId: decoded.cycleId,
+                    eventId: decoded.eventId,
                     inviteRoleNames: decoded.inviteRoleNames ?? []
                 )
             )
@@ -895,6 +939,7 @@ final class RemoteMonitorClient {
                         roleName: nil,
                         targetRoleName: nil,
                         cycleId: nil,
+                        eventId: nil,
                         inviteRoleNames: []
                     )
                 )

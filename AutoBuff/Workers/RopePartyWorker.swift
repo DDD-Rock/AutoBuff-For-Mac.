@@ -10,10 +10,11 @@ final class RopePartyWorker: ObservableObject {
     var onStopped: (() -> Void)?
     var onTeamDisbanded: ((Int64) -> Void)?
     var onBuffDue: (() -> Void)?
-    var onBossJoined: ((Int64) -> Void)?
-    var onBossBuffsCompleted: ((Int64) -> Void)?
+    var onBossInviteStatus: ((String, String) -> Void)?
+    var onBossJoined: ((String) -> Void)?
+    var onBossBuffsCompleted: ((String) -> Void)?
     var onPartyCommandsFinished: (() -> Void)?
-    var onPartyRebuildCommandsFinished: ((Int64) -> Void)?
+    var onPartyRebuildCommandsFinished: ((String) -> Void)?
 
     private let human = HumanInput()
     private let windowSelector = WindowSelector()
@@ -22,23 +23,24 @@ final class RopePartyWorker: ObservableObject {
     private var task: Task<Void, Never>?
     private var runID = UUID()
     private var pendingCommands: [String] = []
-    private var pendingRebuilds: [(cycleID: Int64, roleNames: [String])] = []
+    private var pendingRebuilds: [(eventID: String, roleNames: [String])] = []
     private var configuredBuffs: [BuffConfig] = []
     private var buffDeadlines: [Int: TimeInterval] = [:]
     private var nextBuffDueReportAt: TimeInterval = 0
-    private var activeBossCycleID: Int64?
+    private var activeBossCycleID: String?
     private var bossRoleName = ""
     private var bossOrangeBaseline: Int?
     private var bossOrangeCandidate: Int?
     private var bossOrangeCandidateFrames = 0
     private var bossMinimapReady = false
     private var nextBossInviteAt: TimeInterval = 0
-    private var bossJoinDetectedCycleID: Int64?
+    private var bossJoinDetectedCycleID: String?
     private var nextBossJoinedReportAt: TimeInterval = 0
-    private var latestBossBuffCycleID: Int64 = 0
+    private var processedInviteEventIDs: Set<String> = []
+    private var processedBuffEventIDs: Set<String> = []
     private var processedRebuildKeys: Set<String> = []
-    private var pendingBossInviteStart: (cycleID: Int64, roleName: String)?
-    private var pendingBossBuffCycleID: Int64?
+    private var pendingBossInviteStart: (eventID: String, roleName: String)?
+    private var pendingBossBuffCycleID: String?
     private(set) var isRunning = false
 
     func start(settings: AppSettings, windowID: CGWindowID, firstCreation: Bool) {
@@ -74,7 +76,8 @@ final class RopePartyWorker: ObservableObject {
         pendingRebuilds = []
         activeBossCycleID = nil
         bossJoinDetectedCycleID = nil
-        latestBossBuffCycleID = 0
+        processedInviteEventIDs = []
+        processedBuffEventIDs = []
         processedRebuildKeys = []
         pendingBossInviteStart = nil
         pendingBossBuffCycleID = nil
@@ -124,17 +127,18 @@ final class RopePartyWorker: ObservableObject {
         }
     }
 
-    func startBossInviteCycle(cycleID: Int64, roleName: String) {
-        guard isRunning, cycleID > 0, !roleName.isEmpty else { return }
-        if activeBossCycleID == cycleID || pendingBossInviteStart?.cycleID == cycleID {
+    func startBossInviteCycle(eventID: String, roleName: String) {
+        guard isRunning, !eventID.isEmpty, !roleName.isEmpty else { return }
+        if processedInviteEventIDs.contains(eventID) || activeBossCycleID == eventID || pendingBossInviteStart?.eventID == eventID {
             return
         }
-        pendingBossInviteStart = (cycleID, roleName)
+        pendingBossInviteStart = (eventID, roleName)
         log("老板邀请周期已加入执行队列：\(roleName)")
     }
 
-    private func applyBossInviteStart(cycleID: Int64, roleName: String) {
-        activeBossCycleID = cycleID
+    private func applyBossInviteStart(eventID: String, roleName: String) {
+        activeBossCycleID = eventID
+        processedInviteEventIDs.insert(eventID)
         bossRoleName = roleName
         bossOrangeBaseline = nil
         bossOrangeCandidate = nil
@@ -143,26 +147,25 @@ final class RopePartyWorker: ObservableObject {
         nextBossInviteAt = 0
         bossJoinDetectedCycleID = nil
         nextBossJoinedReportAt = 0
-        log("老板 Buff 周期 \(cycleID) 启动，等待小地图基线后邀请 \(roleName)")
+        log("老板 Buff 事件 \(eventID) 启动，等待小地图基线后邀请 \(roleName)")
     }
 
-    func castBossBuffs(cycleID: Int64) {
-        guard isRunning, cycleID > 0 else { return }
-        guard cycleID > latestBossBuffCycleID else { return }
-        latestBossBuffCycleID = cycleID
-        pendingBossBuffCycleID = cycleID
+    func castBossBuffs(eventID: String) {
+        guard isRunning, !eventID.isEmpty, !processedBuffEventIDs.contains(eventID) else { return }
+        processedBuffEventIDs.insert(eventID)
+        pendingBossBuffCycleID = eventID
         activeBossCycleID = nil
         bossJoinDetectedCycleID = nil
         log("收到老板进队广播，准备强制释放全部已勾选 BUFF")
     }
 
-    func disbandBossParty(cycleID: Int64, phase: String, roleNames: [String], windowID: CGWindowID) {
-        guard isRunning, cycleID > 0 else { return }
-        let rebuildKey = "\(cycleID):\(phase)"
+    func disbandBossParty(eventID: String, phase: String, roleNames: [String], windowID: CGWindowID) {
+        guard isRunning, !eventID.isEmpty else { return }
+        let rebuildKey = "\(eventID):\(phase)"
         guard !processedRebuildKeys.contains(rebuildKey) else { return }
         let normalizedRoleNames = roleNames.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         processedRebuildKeys.insert(rebuildKey)
-        pendingRebuilds.append((cycleID: cycleID, roleNames: normalizedRoleNames))
+        pendingRebuilds.append((eventID: eventID, roleNames: normalizedRoleNames))
     }
 
     private func finishOneShot(runID currentRunID: UUID) {
@@ -197,7 +200,7 @@ final class RopePartyWorker: ObservableObject {
             }
             if let start = pendingBossInviteStart {
                 pendingBossInviteStart = nil
-                applyBossInviteStart(cycleID: start.cycleID, roleName: start.roleName)
+                applyBossInviteStart(eventID: start.eventID, roleName: start.roleName)
             }
             if let cycleID = pendingBossBuffCycleID {
                 pendingBossBuffCycleID = nil
@@ -211,7 +214,7 @@ final class RopePartyWorker: ObservableObject {
                 log("老板 BUFF 周期完成，已发送解散队伍指令：/退出隊伍")
                 await randomSleep(0.8...1.4)
                 if await createPartyAndInvite(roleNames: rebuild.roleNames, windowID: windowID, includeExit: false) {
-                    onPartyRebuildCommandsFinished?(rebuild.cycleID)
+                    onPartyRebuildCommandsFinished?(rebuild.eventID)
                 }
                 continue
             }
@@ -279,12 +282,13 @@ final class RopePartyWorker: ObservableObject {
             let command = "/邀請組隊 \(bossRoleName)"
             if await sendChatCommand(command, windowID: windowID) {
                 log("已发送老板邀请：\(command)")
+                onBossInviteStatus?(cycleID, "invitation_sent")
             }
             nextBossInviteAt = Date().timeIntervalSince1970 + 8
         }
     }
 
-    private func observeBossOrangeCount(_ count: Int, cycleID: Int64) {
+    private func observeBossOrangeCount(_ count: Int, cycleID: String) {
         if bossOrangeCandidate == count {
             bossOrangeCandidateFrames += 1
         } else {
