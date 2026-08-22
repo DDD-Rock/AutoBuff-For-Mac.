@@ -86,6 +86,8 @@ final class PartyInviteWorker: ObservableObject {
                     "第 \(attempt) 次點擊同意按鈕：(\(Int(clickPoint.x)), \(Int(clickPoint.y)))"
                 )
                 await human.clickAt(screenPoint: clickPoint, offsetRange: 2)
+                await sleep(0.3)
+                guard isRunning, !Task.isCancelled else { return }
                 if let safePoint = safeCursorPoint(windowID: windowID) {
                     await human.moveMouse(to: safePoint)
                 }
