@@ -7,7 +7,6 @@ final class PartyInviteDetector {
     private var windowID: CGWindowID = 0
     private var cachedAcceptGamePoint: CGPoint?
     private var cachedImageSize: (width: Int, height: Int)?
-    private var cachedByTemplate = false
     var confidence: Double = 0.58
 
     private struct OrangeBlob: Sendable {
@@ -28,7 +27,6 @@ final class PartyInviteDetector {
         if self.windowID != windowID {
             cachedAcceptGamePoint = nil
             cachedImageSize = nil
-            cachedByTemplate = false
         }
         self.windowID = windowID
     }
@@ -56,7 +54,6 @@ final class PartyInviteDetector {
         if cachedImageSize?.width != imageSize.width || cachedImageSize?.height != imageSize.height {
             cachedAcceptGamePoint = nil
             cachedImageSize = imageSize
-            cachedByTemplate = false
         } else if let cachedPoint = cachedAcceptGamePoint {
             let localRect = cachedSearchRect(for: captured.buffer, around: cachedPoint)
             guard let localRegion = captured.buffer.cropped(
@@ -76,25 +73,18 @@ final class PartyInviteDetector {
                     scales: scales
                 )
             }.value
-            let localPoint: CGPoint?
-            let foundByTemplate = localMatch != nil
-            if let localMatch {
-                localPoint = localMatch.accept.center
-            } else if !cachedByTemplate {
-                localPoint = await Task.detached(priority: .userInitiated) {
-                    Self.findInviteButtonsByColor(in: localRegion)
-                }.value
-            } else {
-                localPoint = nil
+            let localPoint = localMatch?.accept.center
+            if let localPoint {
+                let gamePoint = CGPoint(
+                    x: CGFloat(localRect.x) + localPoint.x,
+                    y: CGFloat(localRect.y) + localPoint.y
+                )
+                cachedAcceptGamePoint = gamePoint
+                return captured.screenPoint(for: gamePoint)
             }
-            guard let localPoint else { return nil }
-            let gamePoint = CGPoint(
-                x: CGFloat(localRect.x) + localPoint.x,
-                y: CGFloat(localRect.y) + localPoint.y
-            )
-            cachedAcceptGamePoint = gamePoint
-            cachedByTemplate = foundByTemplate
-            return captured.screenPoint(for: gamePoint)
+            // A stale or false cached point must not permanently hide the real
+            // invitation at its fixed lower-right location.
+            cachedAcceptGamePoint = nil
         }
 
         let match = await Task.detached(priority: .userInitiated) {
@@ -114,7 +104,6 @@ final class PartyInviteDetector {
             )
             cachedAcceptGamePoint = gamePoint
             cachedImageSize = imageSize
-            cachedByTemplate = true
             return captured.screenPoint(for: gamePoint)
         }
 
@@ -126,18 +115,18 @@ final class PartyInviteDetector {
             x: CGFloat(searchRect.x) + colorPoint.x,
             y: CGFloat(searchRect.y) + colorPoint.y
         )
-        cachedAcceptGamePoint = gamePoint
-        cachedImageSize = imageSize
-        cachedByTemplate = false
+        // Color is only a discovery fallback. It is intentionally not cached,
+        // because common orange game UI can otherwise poison all later scans.
+        cachedAcceptGamePoint = nil
         return captured.screenPoint(for: gamePoint)
     }
 
     private func searchRect(for image: ImageBuffer) -> (x: Int, y: Int, width: Int, height: Int) {
-        let x = max(0, Int(Double(image.width) * 0.43))
-        let y = max(0, Int(Double(image.height) * 0.67))
-        let maxWidth = image.width - x
-        let maxHeight = image.height - y
-        return (x, y, maxWidth, maxHeight)
+        let x = max(0, Int(Double(image.width) * 0.55))
+        let y = max(0, Int(Double(image.height) * 0.72))
+        let right = min(image.width, Int(Double(image.width) * 0.88))
+        let bottom = min(image.height, Int(Double(image.height) * 0.92))
+        return (x, y, max(0, right - x), max(0, bottom - y))
     }
 
     private func cachedSearchRect(
@@ -165,7 +154,7 @@ final class PartyInviteDetector {
                 guard dy >= max(20, buttonSize * 1.5),
                       dy <= max(115, buttonSize * 5.5),
                       dx <= max(12, buttonSize * 0.9),
-                      decline.center.y <= CGFloat(region.height) * 0.72 else {
+                      decline.center.y <= CGFloat(region.height) * 0.90 else {
                     continue
                 }
 
