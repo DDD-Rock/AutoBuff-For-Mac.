@@ -25,7 +25,7 @@ final class PartyInviteDetector {
         self.windowID = windowID
     }
 
-    func findAcceptButtonScreenPoint() async throws -> CGPoint? {
+    func findAcceptButtonScreenPoint(minimumConfidence: Double? = nil) async throws -> CGPoint? {
         let captured = try await captureService.captureBGR(windowID: windowID)
         let searchRect = searchRect(for: captured.buffer)
         guard let region = captured.buffer.cropped(
@@ -37,22 +37,12 @@ final class PartyInviteDetector {
             return nil
         }
 
-        if let colorPoint = await Task.detached(priority: .userInitiated, operation: {
-            Self.findInviteButtonsByColor(in: region)
-        }).value {
-            let gamePoint = CGPoint(
-                x: CGFloat(searchRect.x) + colorPoint.x,
-                y: CGFloat(searchRect.y) + colorPoint.y
-            )
-            return captured.screenPoint(for: gamePoint)
-        }
-
         guard let acceptTemplate = TemplatePaths.load(TemplatePaths.partyAcceptButton),
               let declineTemplate = TemplatePaths.load(TemplatePaths.partyDeclineButton) else {
             return nil
         }
 
-        let threshold = confidence
+        let threshold = minimumConfidence ?? confidence
         let scales = [0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.0, 1.1, 1.2, 1.3, 1.45, 1.6]
         let match = await Task.detached(priority: .userInitiated) {
             Self.findInviteButtonsByTemplate(
@@ -242,9 +232,10 @@ final class PartyInviteDetector {
 
         let dx = abs(decline.center.x - accept.center.x)
         let dy = decline.center.y - accept.center.y
-        let maxHorizontalDrift = CGFloat(max(accept.width, decline.width))
-        let minVerticalGap = CGFloat(max(accept.height, decline.height)) * 0.65
-        let maxVerticalGap = CGFloat(max(accept.height, decline.height)) * 2.4
+        let maxHorizontalDrift = max(6, CGFloat(max(accept.width, decline.width)) * 0.40)
+        let maxButtonSize = CGFloat(max(max(accept.width, accept.height), max(decline.width, decline.height)))
+        let minVerticalGap = maxButtonSize * 0.80
+        let maxVerticalGap = maxButtonSize * 1.80
         guard dx <= maxHorizontalDrift,
               dy >= minVerticalGap,
               dy <= maxVerticalGap else {

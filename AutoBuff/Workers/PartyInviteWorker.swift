@@ -14,6 +14,8 @@ final class PartyInviteWorker: ObservableObject {
     private let windowSelector = WindowSelector()
     private var task: Task<Void, Never>?
     private var runID = UUID()
+    private let confirmationConfidence = 0.70
+    private let samePopupTolerance: CGFloat = 18
 
     private(set) var isRunning = false
     private(set) var currentWindowID: CGWindowID?
@@ -45,6 +47,7 @@ final class PartyInviteWorker: ObservableObject {
     }
 
     private func run(windowID: CGWindowID, runID currentRunID: UUID) async {
+        var pendingPoint: CGPoint?
         while isRunning && !Task.isCancelled {
             guard windowSelector.isWindowValid(windowID: windowID) else {
                 onError?("游戏窗口已失效，自动同意组队已停止")
@@ -53,9 +56,17 @@ final class PartyInviteWorker: ObservableObject {
 
             do {
                 if let point = try await detector.findAcceptButtonScreenPoint() {
+                    guard let previousPoint = pendingPoint,
+                          isSamePopup(previousPoint, point, tolerance: 12) else {
+                        pendingPoint = point
+                        await sleep(Double.random(in: 0.25...0.45))
+                        continue
+                    }
+                    pendingPoint = nil
                     await acceptInvite(at: point, windowID: windowID)
                     await sleep(Double.random(in: 4.0...7.0))
                 } else {
+                    pendingPoint = nil
                     await sleep(Double.random(in: 1.0...2.0))
                 }
             } catch {
@@ -80,9 +91,18 @@ final class PartyInviteWorker: ObservableObject {
             await sleep(0.15)
 
             await human.clickAt(screenPoint: initialPoint, offsetRange: 2)
+            var popupGoneFrames = 0
             for _ in 0..<14 where isRunning && !Task.isCancelled {
                 await sleep(0.15)
-                if (try? await detector.findAcceptButtonScreenPoint()) == nil {
+                let currentPoint = try? await detector.findAcceptButtonScreenPoint(
+                    minimumConfidence: max(confirmationConfidence, detector.confidence + 0.08)
+                )
+                if isSamePopup(initialPoint, currentPoint, tolerance: samePopupTolerance) {
+                    popupGoneFrames = 0
+                    continue
+                }
+                popupGoneFrames += 1
+                if popupGoneFrames >= 2 {
                     onLog?("已同意队伍邀请")
                     onInviteAccepted?()
                     return
@@ -90,6 +110,12 @@ final class PartyInviteWorker: ObservableObject {
             }
             onLog?("邀请弹窗点击后仍未消失，本次不报告入队成功")
         }
+    }
+
+    private func isSamePopup(_ initialPoint: CGPoint, _ currentPoint: CGPoint?, tolerance: CGFloat) -> Bool {
+        guard let currentPoint else { return false }
+        return abs(currentPoint.x - initialPoint.x) <= tolerance
+            && abs(currentPoint.y - initialPoint.y) <= tolerance
     }
 
     private func sleep(_ seconds: Double) async {
