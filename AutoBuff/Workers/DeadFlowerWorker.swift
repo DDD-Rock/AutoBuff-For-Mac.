@@ -7,6 +7,14 @@ enum PortalNavigation {
     // captured points. Keep that as the default while allowing per-user tuning.
     static let defaultWidthThreshold: CGFloat = 2.5
     static let fineAdjustmentMargin: CGFloat = 4
+    static let targetFramesPerSecond = 30.0
+    static let missingPlayerGrace = Duration.milliseconds(120)
+    static let missingPlayerAbort = Duration.seconds(3)
+    static let recoveryJumpInterval = Duration.milliseconds(450)
+    static let stuckTimeout = Duration.milliseconds(900)
+    static let fineAdjustmentHoldMS = 180...280
+    static let fineAdjustmentIntervalMS = 80...160
+    static let transitionCheckAttempts = 3
 
     static func widthThreshold(from settings: AppSettings) -> CGFloat {
         min(20, max(0.5, CGFloat(settings.portalWidthThreshold)))
@@ -290,6 +298,91 @@ final class DeadFlowerWorker: ObservableObject {
             log("❌ 小地图检测失败：\(minimap.lastDetectionSummary)")
             return false
         }
+
+        let portal: CGPoint?
+        if let manualPortal {
+            portal = manualPortal
+            log("使用手动标记的传送门位置")
+        } else if let cachedPortal {
+            portal = cachedPortal
+        } else {
+            portal = try? await minimap.findBluePortal(leftmost: true)
+            cachedPortal = portal
+        }
+        guard let portal else {
+            log("❌ 未找到传送门")
+            return false
+        }
+        log("传送门位置: \(Int(portal.x)), \(Int(portal.y))")
+
+        let stream: GameRegionCaptureStream
+        do {
+            stream = try await minimap.startMinimapStream(
+                targetFramesPerSecond: PortalNavigation.targetFramesPerSecond
+            )
+        } catch {
+            log("⚠️ 无法启动 30 FPS 小地图流，改用兼容导航：\(error.localizedDescription)")
+            return await leaveMarketLegacy(
+                windowID: windowID,
+                jumpKey: jumpKey,
+                portalWidthThreshold: portalWidthThreshold,
+                manualPortal: manualPortal,
+                cachedPortal: &cachedPortal
+            )
+        }
+
+        guard await ensureGameFocus(windowID: windowID, reason: "离开市场") else {
+            await stream.stop()
+            log("❌ 无法让游戏窗口获得焦点，取消本次导航")
+            return false
+        }
+        do {
+            try await human.pressNamedKey(jumpKey)
+            await randomSleep(0.1...0.3)
+        } catch {
+            onError?("跳跃键错误: \(error.localizedDescription)")
+        }
+        log("小地图导航已启用最高 30 FPS 识别")
+
+        let enteredPortal = await navigateToPortal(
+            stream: stream,
+            portal: portal,
+            portalWidthThreshold: portalWidthThreshold,
+            jumpKey: jumpKey,
+            windowID: windowID
+        )
+        await stream.stop()
+
+        guard enteredPortal else {
+            log("⚠️ 未能到达传送门")
+            return false
+        }
+
+        log("等待传送...")
+        await sleep(blackScreenWait)
+        for _ in 0..<8 where isRunning {
+            if (try? await marketDetector.detectLocation().state) == .monsterMap {
+                log("✅ 已离开市场")
+                return true
+            }
+            await sleep(sceneCheckInterval)
+        }
+        log("⚠️ 离开市场超时")
+        return false
+    }
+
+    private func leaveMarketLegacy(
+        windowID: CGWindowID,
+        jumpKey: String,
+        portalWidthThreshold: CGFloat,
+        manualPortal: CGPoint?,
+        cachedPortal: inout CGPoint?
+    ) async -> Bool {
+        log("正在离开市场...")
+        if (try? await minimap.autoDetectDarkRegion()) == nil && minimap.minimapSize == nil {
+            log("❌ 小地图检测失败：\(minimap.lastDetectionSummary)")
+            return false
+        }
         
         let portal: CGPoint?
         if let manualPortal {
@@ -542,6 +635,256 @@ final class DeadFlowerWorker: ObservableObject {
             await sleep(sceneCheckInterval)
         }
         log("⚠️ 离开市场超时")
+        return false
+    }
+
+    private func navigateToPortal(
+        stream: GameRegionCaptureStream,
+        portal: CGPoint,
+        portalWidthThreshold: CGFloat,
+        jumpKey: String,
+        windowID: CGWindowID
+    ) async -> Bool {
+        var currentDirection: HumanInput.Direction?
+        var directApproachDirection: HumanInput.Direction?
+        var isFineAdjusting = false
+        var hasInitialPosition = false
+        var didInitialRecoveryJump = false
+        var initialDeadline = ContinuousClock.now + .seconds(2)
+        var missingSince: ContinuousClock.Instant?
+        var lastRecoveryJumpAt: ContinuousClock.Instant?
+        var lastMissingLogAt: ContinuousClock.Instant?
+        var progressAnchorX: CGFloat?
+        var progressAnchorAt: ContinuousClock.Instant?
+        let navigationStartedAt = ContinuousClock.now
+        var enteredPortal = false
+
+        do {
+            for try await frame in stream.frames {
+                guard isRunning, !Task.isCancelled else { break }
+                guard navigationStartedAt.duration(to: .now) < .seconds(30) else {
+                    log("⚠️ 传送门导航超时")
+                    break
+                }
+
+                if !windowSelector.isWindowOwnerFrontmost(windowID: windowID) {
+                    currentDirection = nil
+                    progressAnchorX = nil
+                    progressAnchorAt = nil
+                    log("⚠️ 检测到游戏窗口失去焦点，已停止移动并正在恢复")
+                    guard await ensureGameFocus(windowID: windowID, reason: "导航恢复") else {
+                        log("❌ 无法恢复游戏窗口焦点，终止本次导航")
+                        break
+                    }
+                    await human.releaseAll()
+                    log("✅ 游戏窗口焦点已恢复，继续导航")
+                }
+
+                let detectedPlayer = await minimap.findPlayerPosition(in: frame)
+                let now = ContinuousClock.now
+
+                if !hasInitialPosition {
+                    guard let player = detectedPlayer else {
+                        if now < initialDeadline {
+                            continue
+                        }
+                        if !didInitialRecoveryJump {
+                            log("导航前黄点被遮挡，尝试跳跃定位...")
+                            _ = await performRecoveryJump(
+                                jumpKey: jumpKey,
+                                windowID: windowID
+                            )
+                            didInitialRecoveryJump = true
+                            initialDeadline = ContinuousClock.now + .milliseconds(500)
+                            continue
+                        }
+                        log("❌ 导航前无法定位玩家：\(minimap.lastPlayerDetectionSummary)")
+                        break
+                    }
+
+                    hasInitialPosition = true
+                    let distance = portal.x - player.x
+                    log("导航坐标: 玩家X=\(format(player.x))，传送门X=\(format(portal.x))，距离=\(format(distance))")
+                    if PortalNavigation.hasArrived(
+                        playerX: player.x,
+                        portalX: portal.x,
+                        widthThreshold: portalWidthThreshold
+                    ) {
+                        enteredPortal = await tryEnterPortal(windowID: windowID)
+                        isFineAdjusting = !enteredPortal
+                    } else {
+                        let direction: HumanInput.Direction = distance > 0 ? .right : .left
+                        directApproachDirection = direction
+                        guard await startMoving(direction, windowID: windowID) else { break }
+                        currentDirection = direction
+                        progressAnchorX = player.x
+                        progressAnchorAt = ContinuousClock.now
+                    }
+                    if enteredPortal { break }
+                    continue
+                }
+
+                guard let player = detectedPlayer else {
+                    if missingSince == nil {
+                        missingSince = now
+                    }
+                    let missingDuration = missingSince?.duration(to: now) ?? .zero
+                    if missingDuration < PortalNavigation.missingPlayerGrace {
+                        continue
+                    }
+                    if currentDirection != nil {
+                        await human.stopMove()
+                        currentDirection = nil
+                    }
+                    progressAnchorX = nil
+                    progressAnchorAt = nil
+                    if lastMissingLogAt == nil
+                        || lastMissingLogAt!.duration(to: now) >= .seconds(1) {
+                        log("⚠️ 玩家黄点持续丢失，已停止移动，尝试跳跃定位：\(minimap.lastPlayerDetectionSummary)")
+                        lastMissingLogAt = now
+                    }
+                    if lastRecoveryJumpAt == nil
+                        || lastRecoveryJumpAt!.duration(to: now) >= PortalNavigation.recoveryJumpInterval {
+                        _ = await performRecoveryJump(
+                            jumpKey: jumpKey,
+                            windowID: windowID
+                        )
+                        lastRecoveryJumpAt = ContinuousClock.now
+                    }
+                    if missingDuration >= PortalNavigation.missingPlayerAbort {
+                        log("❌ 连续无法定位玩家，终止本次导航")
+                        break
+                    }
+                    continue
+                }
+
+                if missingSince != nil {
+                    log("已重新定位玩家: X=\(format(player.x))")
+                }
+                missingSince = nil
+                let distance = portal.x - player.x
+                let neededDirection: HumanInput.Direction = distance > 0 ? .right : .left
+
+                // 按上键失败后即使仍在容差内，也先朝传送门中心多走一步。
+                if isFineAdjusting {
+                    guard await ensureGameFocus(windowID: windowID, reason: "传送门微调") else { break }
+                    log("向\(neededDirection == .right ? "右" : "左")微调后尝试进入传送门")
+                    await human.tapDirection(
+                        neededDirection,
+                        holdMS: PortalNavigation.fineAdjustmentHoldMS,
+                        intervalMS: PortalNavigation.fineAdjustmentIntervalMS
+                    )
+                    currentDirection = nil
+                    progressAnchorX = nil
+                    progressAnchorAt = nil
+                    enteredPortal = await tryEnterPortal(windowID: windowID)
+                    if enteredPortal { break }
+                    continue
+                }
+
+                if PortalNavigation.hasArrived(
+                    playerX: player.x,
+                    portalX: portal.x,
+                    widthThreshold: portalWidthThreshold
+                ) {
+                    await human.stopMove()
+                    currentDirection = nil
+                    log("已到达传送门范围，按上键进入（距离=\(format(distance))）")
+                    enteredPortal = await tryEnterPortal(windowID: windowID)
+                    isFineAdjusting = !enteredPortal
+                    if enteredPortal { break }
+                    continue
+                }
+
+                if let directApproachDirection,
+                   neededDirection != directApproachDirection {
+                    if currentDirection != nil {
+                        await human.stopMove()
+                        currentDirection = nil
+                    }
+                    isFineAdjusting = true
+                    progressAnchorX = nil
+                    progressAnchorAt = nil
+                    log("首次直行越过传送门，切换为长按微调并逐次试按上键")
+                    continue
+                }
+
+                if currentDirection != nil {
+                    if progressAnchorX == nil {
+                        progressAnchorX = player.x
+                        progressAnchorAt = now
+                    } else if abs(player.x - progressAnchorX!) > 1 {
+                        progressAnchorX = player.x
+                        progressAnchorAt = now
+                    } else if let anchorAt = progressAnchorAt,
+                              anchorAt.duration(to: now) >= PortalNavigation.stuckTimeout {
+                        await human.stopMove()
+                        currentDirection = nil
+                        progressAnchorX = nil
+                        progressAnchorAt = nil
+                        log("检测到移动停滞（游戏焦点正常），重新按方向键：\(minimap.lastPlayerDetectionSummary)")
+                        await randomSleep(0.1...0.3)
+                    }
+                }
+
+                if currentDirection != neededDirection {
+                    guard await startMoving(neededDirection, windowID: windowID) else { break }
+                    currentDirection = neededDirection
+                    progressAnchorX = player.x
+                    progressAnchorAt = ContinuousClock.now
+                }
+            }
+        } catch {
+            log("❌ 小地图视频流中断：\(error.localizedDescription)")
+        }
+
+        await human.stopMove()
+        return enteredPortal
+    }
+
+    private func performRecoveryJump(
+        jumpKey: String,
+        windowID: CGWindowID
+    ) async -> Bool {
+        guard isRunning, !Task.isCancelled else { return false }
+        guard await ensureGameFocus(windowID: windowID, reason: "跳跃定位") else {
+            log("❌ 跳跃定位前无法确认游戏窗口焦点")
+            return false
+        }
+
+        let jumpDuration = Double.random(in: 0.08...0.16)
+        let keyCode: CGKeyCode
+        do {
+            keyCode = try await human.pressNamedKeyDown(jumpKey)
+        } catch {
+            onError?("跳跃键错误: \(error.localizedDescription)")
+            return false
+        }
+        await sleep(jumpDuration)
+        await human.releaseKey(keyCode)
+        return true
+    }
+
+    private func tryEnterPortal(windowID: CGWindowID) async -> Bool {
+        guard await ensureGameFocus(windowID: windowID, reason: "进入传送门") else {
+            log("❌ 进入传送门前无法确认游戏窗口焦点")
+            return false
+        }
+        await human.usePortal()
+
+        var consecutiveLogoMisses = 0
+        for _ in 0..<PortalNavigation.transitionCheckAttempts where isRunning {
+            if (try? await marketDetector.isMarketLogoVisible()) == true {
+                consecutiveLogoMisses = 0
+            } else {
+                consecutiveLogoMisses += 1
+                if consecutiveLogoMisses >= 2 {
+                    log("已触发传送，等待切换场景")
+                    return true
+                }
+            }
+            await sleep(0.08)
+        }
         return false
     }
 

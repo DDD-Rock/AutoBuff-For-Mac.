@@ -203,7 +203,8 @@ final class FollowHealWalkingWorker: ObservableObject {
         if await castIfBuffDue(buffs: buffs, nextCast: &nextCast, windowID: windowID) { return }
         guard await ensureGameFocus(windowID: windowID, reason: "左右走修正") else { return }
         await move(direction)
-        await sleep(Double.random(in: FollowHealWalkingNavigation.adjustDurationMS) / 1000)
+        let durationMS = Int.random(in: FollowHealWalkingNavigation.adjustDurationMS)
+        await sleep(Double(durationMS) / 1000)
         await human.stopMove()
         await randomSleep(0.22...0.75)
     }

@@ -86,6 +86,9 @@ final class PartyInviteWorker: ObservableObject {
                     "第 \(attempt) 次點擊同意按鈕：(\(Int(clickPoint.x)), \(Int(clickPoint.y)))"
                 )
                 await human.clickAt(screenPoint: clickPoint, offsetRange: 2)
+                if let safePoint = safeCursorPoint(windowID: windowID) {
+                    await human.moveMouse(to: safePoint)
+                }
                 var popupGoneFrames = 0
                 for _ in 0..<4 where isRunning && !Task.isCancelled {
                     await sleep(0.15)
@@ -127,6 +130,18 @@ final class PartyInviteWorker: ObservableObject {
         guard let currentPoint else { return false }
         return abs(currentPoint.x - initialPoint.x) <= tolerance
             && abs(currentPoint.y - initialPoint.y) <= tolerance
+    }
+
+    private func safeCursorPoint(windowID: CGWindowID) -> CGPoint? {
+        guard let bounds = windowSelector.getWindowInfo(windowID: windowID)?.bounds,
+              bounds.width > 0,
+              bounds.height > 0 else {
+            return nil
+        }
+        return CGPoint(
+            x: bounds.minX + bounds.width * 0.82,
+            y: bounds.minY + bounds.height * 0.50
+        )
     }
 
     private func sleep(_ seconds: Double) async {

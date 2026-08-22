@@ -94,7 +94,16 @@ actor HumanInput {
         let offsetX = CGFloat.random(in: CGFloat(-offsetRange)...CGFloat(offsetRange))
         let offsetY = CGFloat.random(in: CGFloat(-offsetRange)...CGFloat(offsetRange))
         let target = CGPoint(x: screenPoint.x + offsetX, y: screenPoint.y + offsetY)
-        
+
+        moveMouse(to: target)
+        Thread.sleep(forTimeInterval: Double.random(in: 0.05...0.15))
+        let duration = randomDuration(mouseClickDuration)
+        postMouse(down: true, at: target)
+        Thread.sleep(forTimeInterval: duration)
+        postMouse(down: false, at: target)
+    }
+
+    func moveMouse(to screenPoint: CGPoint) {
         // CGEvent and CGWindow use the same top-left global display coordinate
         // system. NSEvent.mouseLocation is unflipped (bottom-left), so do not mix it in.
         let current = CGEvent(source: nil)?.location ?? screenPoint
@@ -102,17 +111,12 @@ actor HumanInput {
         for step in 1...steps {
             let progress = Double(step) / Double(steps)
             let eased = 1 - pow(1 - progress, 2)
-            let x = current.x + (target.x - current.x) * eased
-            let y = current.y + (target.y - current.y) * eased
+            let x = current.x + (screenPoint.x - current.x) * eased
+            let y = current.y + (screenPoint.y - current.y) * eased
             postMouseMove(to: CGPoint(x: x, y: y))
             Thread.sleep(forTimeInterval: Double.random(in: 0.01...0.03))
         }
-        postMouseMove(to: target)
-        Thread.sleep(forTimeInterval: Double.random(in: 0.05...0.15))
-        let duration = randomDuration(mouseClickDuration)
-        postMouse(down: true, at: target)
-        Thread.sleep(forTimeInterval: duration)
-        postMouse(down: false, at: target)
+        postMouseMove(to: screenPoint)
     }
     
     @discardableResult

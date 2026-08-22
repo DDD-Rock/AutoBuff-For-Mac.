@@ -794,6 +794,13 @@ struct SettingsManagerTests {
 
         #expect(PortalNavigation.shouldFineAdjust(distance: 6, widthThreshold: 2.5))
         #expect(!PortalNavigation.shouldFineAdjust(distance: 7, widthThreshold: 2.5))
+        #expect(PortalNavigation.targetFramesPerSecond == 30)
+        #expect(PortalNavigation.missingPlayerGrace == .milliseconds(120))
+        #expect(PortalNavigation.missingPlayerAbort == .seconds(3))
+        #expect(PortalNavigation.recoveryJumpInterval == .milliseconds(450))
+        #expect(PortalNavigation.stuckTimeout == .milliseconds(900))
+        #expect(PortalNavigation.fineAdjustmentHoldMS == 180...280)
+        #expect(PortalNavigation.transitionCheckAttempts == 3)
     }
 
     @Test func dialogConfirmButtonValidationAcceptsOrangeButtonBackground() {

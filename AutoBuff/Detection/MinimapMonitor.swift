@@ -87,6 +87,13 @@ final class MinimapMonitor {
     
     func findPlayerPosition(minArea: Int = 2) async throws -> CGPoint? {
         let minimap = try await captureMinimap()
+        return await findPlayerPosition(in: minimap, minArea: minArea)
+    }
+
+    func findPlayerPosition(
+        in minimap: ImageBuffer,
+        minArea: Int = 2
+    ) async -> CGPoint? {
         let expectedPlayerPoint = self.expectedPlayerPoint
         let result = await Task.detached(priority: .userInitiated, operation: {
             ColorDetector.detectPlayerMarker(
