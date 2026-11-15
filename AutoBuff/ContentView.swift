@@ -34,7 +34,7 @@ struct ContentView: View {
         }
         .preferredColorScheme(.light)
         .onChange(of: viewModel.mode) { _, mode in
-            if mode == .monitor && workspaceTab == .tools {
+            if (mode == .monitor || mode == .infiniteSmoke) && workspaceTab == .tools {
                 workspaceTab = .configuration
             }
         }
@@ -123,6 +123,31 @@ struct ContentView: View {
                     } else {
                         viewModel.appendLog("已清除跟补基准点")
                     }
+                }
+            }
+        }
+        .sheet(isPresented: $viewModel.showSmokeMarker) {
+            if let window = viewModel.selectedWindow {
+                PortalMarkerView(
+                    windowID: window.windowID,
+                    existingX: nil,
+                    existingY: nil,
+                    title: "圈选放烟区域",
+                    showAutoPortal: false,
+                    clearButtonTitle: "清除放烟区域",
+                    loadedStatusText: "在小地图拖动框选允许释放烟雾的区域",
+                    selectionMode: .area,
+                    existingArea: viewModel.settings.smokeBuffZone,
+                    fixedMinimapRegion: viewModel.settings.smokeMinimapRegion,
+                    onConfirmArea: { zone, region in
+                        viewModel.settings.smokeBuffZone = zone
+                        viewModel.settings.smokeMinimapRegion = zone == nil ? nil : region
+                        viewModel.saveSettings()
+                        if zone != nil { viewModel.appendLog("放烟允许区域已设置") }
+                        else { viewModel.appendLog("放烟允许区域已清除") }
+                    }
+                ) { x, y, region in
+                    // Area selection supplies its result through onConfirmArea.
                 }
             }
         }
@@ -267,14 +292,14 @@ struct ContentView: View {
                     .tag(WorkspaceTab.configuration)
                 Label("日志", systemImage: "text.alignleft")
                     .tag(WorkspaceTab.logs)
-                if viewModel.mode != .monitor {
+                if viewModel.mode != .monitor && viewModel.mode != .infiniteSmoke {
                     Label("工具", systemImage: "hammer")
                         .tag(WorkspaceTab.tools)
                 }
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: viewModel.mode == .monitor ? 170 : 240)
+            .frame(width: viewModel.mode == .monitor || viewModel.mode == .infiniteSmoke ? 170 : 240)
             .accessibilityIdentifier("workspace.tabs")
         }
         .padding(.horizontal, 18)
@@ -494,6 +519,13 @@ struct ContentView: View {
                     subtitle: "只读显示实时地图"
                 )
             }
+            if viewModel.remoteMonitorIsSuperAdmin || viewModel.authorizedModes.contains(.infiniteSmoke) {
+                modeButton(
+                    .infiniteSmoke,
+                    icon: "smoke.fill",
+                    subtitle: "持续释放烟雾并刷新好友频道"
+                )
+            }
         }
     }
 
@@ -630,6 +662,7 @@ struct ContentView: View {
         case .temple: return "为时间神殿地图配置专用 Buff 行为"
         case .followHeal: return "自动补血、位置修正并回到基准点"
         case .monitor: return "只读取游戏画面并显示实时地图"
+        case .infiniteSmoke: return "持续释放烟雾并通过好友列表刷新频道"
         }
     }
 

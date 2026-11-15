@@ -33,6 +33,7 @@ final class MainViewModel: ObservableObject {
         case ropeParty
         case followHeal
         case monitor
+        case infiniteSmoke
     }
 
     @Published var settings: AppSettings
@@ -51,6 +52,7 @@ final class MainViewModel: ObservableObject {
     @Published var showVirtualKeyboard = false
     @Published var showPortalMarker = false
     @Published var showFollowHealMarker = false
+    @Published var showSmokeMarker = false
     @Published var showMonitorZoneMarker = false
     @Published var showMapTopologyEditor = false
     @Published var isCheckingPortalMarker = false
@@ -95,6 +97,7 @@ final class MainViewModel: ObservableObject {
     private let ropePartyWorker = RopePartyWorker()
     private let followHealWorker = FollowHealWorker()
     private let followHealWalkingWorker = FollowHealWalkingWorker()
+    private let infiniteSmokeWorker = InfiniteSmokeWorker()
     private let partyInviteWorker = PartyInviteWorker()
     private let monitoringSession = MonitoringSession()
     private let remoteMonitorClient = RemoteMonitorClient()
@@ -115,6 +118,7 @@ final class MainViewModel: ObservableObject {
         case chairKey
         case healSkillKey
         case teleportSkillKey
+        case smokeKey
     }
 
     struct PortalMarkerAlert: Identifiable {
@@ -352,6 +356,12 @@ final class MainViewModel: ObservableObject {
                 maps: settings.mapTopologies
             )
             appendLog("监控模式已启动（只读，不发送输入）")
+        case .infiniteSmoke:
+            activeWorker = .infiniteSmoke
+            partyInviteWorker.stop()
+            isPartyInviteWorkerActive = false
+            infiniteSmokeWorker.start(settings: settings, windowID: window.windowID)
+            appendLog("无限烟模式已启动")
         }
         publishRemoteClientState()
     }
@@ -364,6 +374,7 @@ final class MainViewModel: ObservableObject {
         ropePartyWorker.stop()
         followHealWorker.stop()
         followHealWalkingWorker.stop()
+        infiniteSmokeWorker.stop()
         monitoringSession.stop()
         isRunning = false
         countdowns = [:]
@@ -405,6 +416,8 @@ final class MainViewModel: ObservableObject {
             settings.healSkillKey = key
         case .teleportSkillKey:
             settings.teleportSkillKey = key
+        case .smokeKey:
+            settings.smokeKey = key
         }
         saveSettings()
     }
@@ -963,7 +976,10 @@ final class MainViewModel: ObservableObject {
 
     private func publishRemoteClientState() {
         guard remoteMonitorAuthenticated else { return }
-        remoteMonitorClient.publishClientState(mode: mode.rawValue, running: isRunning)
+        remoteMonitorClient.publishClientState(
+            mode: mode == .infiniteSmoke ? "emulator" : mode.rawValue,
+            running: isRunning
+        )
     }
 
     private func handleWorkerStopped(_ worker: ActiveWorker) {
@@ -971,6 +987,9 @@ final class MainViewModel: ObservableObject {
         activeWorker = nil
         isRunning = false
         countdowns = [:]
+        if worker == .infiniteSmoke {
+            syncPartyInviteWorker(logMissingRequirements: false)
+        }
         publishRemoteClientState()
     }
 
@@ -1066,6 +1085,9 @@ final class MainViewModel: ObservableObject {
         followHealWalkingWorker.onStopped = { [weak self] in
             self?.handleWorkerStopped(.followHeal)
         }
+        infiniteSmokeWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
+        infiniteSmokeWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
+        infiniteSmokeWorker.onStopped = { [weak self] in self?.handleWorkerStopped(.infiniteSmoke) }
 
         partyInviteWorker.onLog = { [weak self] msg in self?.appendLog(msg) }
         partyInviteWorker.onError = { [weak self] msg in self?.appendLog("错误: \(msg)") }
@@ -1175,7 +1197,7 @@ final class MainViewModel: ObservableObject {
     }
 
     private func syncPartyInviteWorker(logMissingRequirements: Bool) {
-        if isRunning && mode == .monitor {
+        if isRunning && (mode == .monitor || mode == .infiniteSmoke) {
             partyInviteWorker.stop()
             isPartyInviteWorkerActive = false
             return
@@ -1408,10 +1430,10 @@ enum WorkerConfigurationValidator {
         let enabled = settings.buffs.filter(\.enabled)
         var errors: [String] = []
         let ropePartyMode = mode == .temple && settings.templeFunction == .ropeParty
-        if enabled.isEmpty && mode != .followHeal && !ropePartyMode {
+        if enabled.isEmpty && mode != .followHeal && mode != .infiniteSmoke && !ropePartyMode {
             errors.append("请至少启用一个 Buff")
         }
-        for buff in enabled {
+        for buff in mode == .infiniteSmoke ? [] : enabled {
             if buff.key.isEmpty {
                 errors.append("Buff #\(buff.id) 尚未设置按键")
             } else if KeyCodeMap.virtualKeyCode(for: buff.key) == nil {
@@ -1423,7 +1445,7 @@ enum WorkerConfigurationValidator {
                 errors.append("Buff #\(buff.id) 的持续时间需为 \(AppConstants.minInterval)～\(Int(AppConstants.maxInterval)) 秒")
             }
         }
-        if settings.sitChairEnabled && KeyCodeMap.virtualKeyCode(for: settings.chairKey) == nil {
+        if mode != .infiniteSmoke && settings.sitChairEnabled && KeyCodeMap.virtualKeyCode(for: settings.chairKey) == nil {
             errors.append("椅子键“\(settings.chairKey)”不受支持")
         }
         if mode == .deadFlower && KeyCodeMap.virtualKeyCode(for: settings.jumpKey) == nil {
@@ -1471,6 +1493,23 @@ enum WorkerConfigurationValidator {
             }
             if settings.followHealBoundaryTolerance < 1 || settings.followHealBoundaryTolerance > 50 {
                 errors.append("跟补左右界限值需为 1～50")
+            }
+        }
+        if mode == .infiniteSmoke {
+            if KeyCodeMap.virtualKeyCode(for: settings.jumpKey) == nil {
+                errors.append("跳跃键“\(settings.jumpKey)”不受支持")
+            }
+            if settings.smokeKey.isEmpty || KeyCodeMap.virtualKeyCode(for: settings.smokeKey) == nil {
+                errors.append("烟雾技能键“\(settings.smokeKey)”不受支持")
+            }
+            if settings.smokeBuffZone == nil {
+                errors.append("请先圈选放烟允许区域")
+            }
+            if settings.smokeMinimapRegion == nil {
+                errors.append("请重新圈选放烟允许区域并保存小地图区域")
+            }
+            if settings.smokeFriendName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                errors.append("请设置好友名称")
             }
         }
         return errors

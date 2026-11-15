@@ -9,16 +9,18 @@ struct SettingsSectionView: View {
         VStack(alignment: .leading, spacing: 13) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("BUFF 配置")
+                    Text(viewModel.mode == .infiniteSmoke ? "无限烟配置" : "BUFF 配置")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(AppTheme.textPrimary)
                         .accessibilityIdentifier("settings.title")
-                    Text("按键完成后立即开始独立倒计时")
-                        .font(.system(size: 10))
-                        .foregroundStyle(AppTheme.textSecondary)
+                    if viewModel.mode != .infiniteSmoke {
+                        Text("按键完成后立即开始独立倒计时")
+                            .font(.system(size: 10))
+                            .foregroundStyle(AppTheme.textSecondary)
+                    }
                 }
                 Spacer()
-                if viewModel.settings.buffs.count < AppConstants.maxBuffSlotCount {
+                if viewModel.mode != .infiniteSmoke && viewModel.settings.buffs.count < AppConstants.maxBuffSlotCount {
                     Button {
                         viewModel.addBuff()
                     } label: {
@@ -32,7 +34,8 @@ struct SettingsSectionView: View {
                 }
             }
 
-            VStack(spacing: 0) {
+            if viewModel.mode != .infiniteSmoke {
+                VStack(spacing: 0) {
                 ForEach(viewModel.settings.buffs.indices, id: \.self) { index in
                     BuffRowView(
                         buff: $viewModel.settings.buffs[index],
@@ -50,9 +53,9 @@ struct SettingsSectionView: View {
                         Divider().overlay(AppTheme.border)
                     }
                 }
-            }
-            .background(AppTheme.background.opacity(0.55))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .background(AppTheme.background.opacity(0.55))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Divider().overlay(AppTheme.border)
 
@@ -63,6 +66,7 @@ struct SettingsSectionView: View {
             mapTopologyOption
 
             Divider().overlay(AppTheme.border)
+            }
 
             switch viewModel.mode {
             case .liveFlower:
@@ -75,6 +79,8 @@ struct SettingsSectionView: View {
                 followHealOptions
             case .monitor:
                 EmptyView()
+            case .infiniteSmoke:
+                smokeOptions
             }
         }
         .appCard()
@@ -407,6 +413,41 @@ struct SettingsSectionView: View {
             Spacer(minLength: 0)
         }
         .frame(minHeight: 54)
+        .allowsHitTesting(!viewModel.isRunning)
+    }
+
+    private var smokeOptions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text("放烟区域")
+                    .font(.system(size: 12, weight: .semibold))
+                if let zone = viewModel.settings.smokeBuffZone {
+                    Text(String(format: "%.0f%% x %.0f%%", zone.width * 100, zone.height * 100))
+                        .foregroundStyle(AppTheme.textSecondary)
+                } else {
+                    Text("未圈选").foregroundStyle(AppTheme.textSecondary)
+                }
+                Spacer()
+                Button("圈选区域", systemImage: "rectangle.dashed") {
+                    viewModel.showSmokeMarker = true
+                }
+                .controlSize(.small)
+                .disabled(viewModel.selectedWindow == nil)
+            }
+            HStack(spacing: 12) {
+                optionColumn("跳跃键") {
+                    Button(viewModel.settings.jumpKey) { viewModel.openKeyboard(for: .jumpKey) }.controlSize(.small)
+                }
+                optionColumn("烟雾技能键") {
+                    Button(viewModel.settings.smokeKey) { viewModel.openKeyboard(for: .smokeKey) }.controlSize(.small)
+                }
+            }
+            HStack(spacing: 8) {
+                Text("好友名称")
+                TextField("好友名称", text: $viewModel.settings.smokeFriendName)
+                    .textFieldStyle(.roundedBorder)
+            }
+        }
         .allowsHitTesting(!viewModel.isRunning)
     }
 

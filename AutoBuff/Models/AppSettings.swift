@@ -7,6 +7,7 @@ enum AppMode: String, Codable, CaseIterable {
     case temple
     case followHeal = "follow_heal"
     case monitor
+    case infiniteSmoke = "infinite_smoke"
 
     static let defaultAuthorized: Set<AppMode> = [.deadFlower, .liveFlower, .temple]
 
@@ -17,6 +18,7 @@ enum AppMode: String, Codable, CaseIterable {
         case .temple: return "神殿模式"
         case .followHeal: return "跟补模式"
         case .monitor: return "监控模式"
+        case .infiniteSmoke: return "无限烟模式"
         }
     }
 }
@@ -92,7 +94,7 @@ enum PreSkillMoveMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
-    static let currentSchemaVersion = 10
+    static let currentSchemaVersion = 12
     static let defaultMonitorServerBaseURL = "https://buff.juanwang.cc"
 
     var schemaVersion: Int = currentSchemaVersion
@@ -116,6 +118,17 @@ struct AppSettings: Codable, Equatable {
     var healMinimapRegionY: Int? = nil
     var healMinimapRegionWidth: Int? = nil
     var healMinimapRegionHeight: Int? = nil
+    var smokeAnchorX: Int? = nil
+    var smokeAnchorY: Int? = nil
+    var smokeMinimapRegionX: Int? = nil
+    var smokeMinimapRegionY: Int? = nil
+    var smokeMinimapRegionWidth: Int? = nil
+    var smokeMinimapRegionHeight: Int? = nil
+    var smokeBuffZone: MonitorSafeZone? = nil
+    var smokeHalfWidth: Int = 5
+    var smokeHalfHeight: Int = 3
+    var smokeKey: String = "Shift"
+    var smokeFriendName: String = "QQNeNe好喝到咩噗茶"
     var sitChairEnabled: Bool = false
     var chairKey: String = "="
     var randomBehaviorEnabled: Bool = true
@@ -182,6 +195,10 @@ extension AppSettings {
         case monitorAccountUsername
         case monitorAccountNickname
         case monitorSafeZone
+        case smokeAnchorX, smokeAnchorY, smokeMinimapRegionX, smokeMinimapRegionY
+        case smokeMinimapRegionWidth, smokeMinimapRegionHeight, smokeBuffZone
+        case smokeHalfWidth, smokeHalfHeight
+        case smokeKey, smokeFriendName
         case buffs
     }
 
@@ -228,6 +245,17 @@ extension AppSettings {
         self.healMinimapRegionY = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionY)
         self.healMinimapRegionWidth = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionWidth)
         self.healMinimapRegionHeight = try container.decodeIfPresent(Int.self, forKey: .healMinimapRegionHeight)
+        self.smokeAnchorX = try container.decodeIfPresent(Int.self, forKey: .smokeAnchorX)
+        self.smokeAnchorY = try container.decodeIfPresent(Int.self, forKey: .smokeAnchorY)
+        self.smokeMinimapRegionX = try container.decodeIfPresent(Int.self, forKey: .smokeMinimapRegionX)
+        self.smokeMinimapRegionY = try container.decodeIfPresent(Int.self, forKey: .smokeMinimapRegionY)
+        self.smokeMinimapRegionWidth = try container.decodeIfPresent(Int.self, forKey: .smokeMinimapRegionWidth)
+        self.smokeMinimapRegionHeight = try container.decodeIfPresent(Int.self, forKey: .smokeMinimapRegionHeight)
+        self.smokeBuffZone = try container.decodeIfPresent(MonitorSafeZone.self, forKey: .smokeBuffZone)
+        self.smokeHalfWidth = try container.decodeIfPresent(Int.self, forKey: .smokeHalfWidth) ?? 5
+        self.smokeHalfHeight = try container.decodeIfPresent(Int.self, forKey: .smokeHalfHeight) ?? 3
+        self.smokeKey = try container.decodeIfPresent(String.self, forKey: .smokeKey) ?? "Shift"
+        self.smokeFriendName = try container.decodeIfPresent(String.self, forKey: .smokeFriendName) ?? "QQNeNe好喝到咩噗茶"
         self.sitChairEnabled = try container.decodeIfPresent(Bool.self, forKey: .sitChairEnabled) ?? false
         self.chairKey = try container.decodeIfPresent(String.self, forKey: .chairKey) ?? "="
         self.randomBehaviorEnabled = try container.decodeIfPresent(Bool.self, forKey: .randomBehaviorEnabled) ?? true
@@ -265,6 +293,19 @@ extension AppSettings {
             forKey: .monitorSafeZone
         )
         self.buffs = try container.decodeIfPresent([BuffConfig].self, forKey: .buffs) ?? AppSettings.default.buffs
+
+        // Preserve existing smoke setups while moving away from pixel tolerances.
+        if self.smokeBuffZone == nil,
+           let x = self.smokeAnchorX,
+           let y = self.smokeAnchorY,
+           let region = self.smokeMinimapRegion {
+            self.smokeBuffZone = MonitorSafeZone(
+                centerPixel: CGPoint(x: x, y: y),
+                widthPixels: Double(self.smokeHalfWidth * 2),
+                heightPixels: Double(self.smokeHalfHeight * 2),
+                in: region.size
+            )
+        }
     }
 
     static func normalizedMonitorServerBaseURL(_ value: String?) -> String {
@@ -301,6 +342,17 @@ extension AppSettings {
         try container.encodeIfPresent(healMinimapRegionY, forKey: .healMinimapRegionY)
         try container.encodeIfPresent(healMinimapRegionWidth, forKey: .healMinimapRegionWidth)
         try container.encodeIfPresent(healMinimapRegionHeight, forKey: .healMinimapRegionHeight)
+        try container.encodeIfPresent(smokeAnchorX, forKey: .smokeAnchorX)
+        try container.encodeIfPresent(smokeAnchorY, forKey: .smokeAnchorY)
+        try container.encodeIfPresent(smokeMinimapRegionX, forKey: .smokeMinimapRegionX)
+        try container.encodeIfPresent(smokeMinimapRegionY, forKey: .smokeMinimapRegionY)
+        try container.encodeIfPresent(smokeMinimapRegionWidth, forKey: .smokeMinimapRegionWidth)
+        try container.encodeIfPresent(smokeMinimapRegionHeight, forKey: .smokeMinimapRegionHeight)
+        try container.encodeIfPresent(smokeBuffZone, forKey: .smokeBuffZone)
+        try container.encode(smokeHalfWidth, forKey: .smokeHalfWidth)
+        try container.encode(smokeHalfHeight, forKey: .smokeHalfHeight)
+        try container.encode(smokeKey, forKey: .smokeKey)
+        try container.encode(smokeFriendName, forKey: .smokeFriendName)
         try container.encode(sitChairEnabled, forKey: .sitChairEnabled)
         try container.encode(chairKey, forKey: .chairKey)
         try container.encode(randomBehaviorEnabled, forKey: .randomBehaviorEnabled)
@@ -352,6 +404,21 @@ extension AppSettings {
             healMinimapRegionY = Int(newValue.minY.rounded())
             healMinimapRegionWidth = Int(newValue.width.rounded())
             healMinimapRegionHeight = Int(newValue.height.rounded())
+        }
+    }
+
+    var smokeMinimapRegion: CGRect? {
+        get {
+            guard let x = smokeMinimapRegionX, let y = smokeMinimapRegionY,
+                  let width = smokeMinimapRegionWidth, let height = smokeMinimapRegionHeight,
+                  width > 0, height > 0 else { return nil }
+            return CGRect(x: x, y: y, width: width, height: height)
+        }
+        set {
+            smokeMinimapRegionX = newValue.map { Int($0.origin.x) }
+            smokeMinimapRegionY = newValue.map { Int($0.origin.y) }
+            smokeMinimapRegionWidth = newValue.map { Int($0.width) }
+            smokeMinimapRegionHeight = newValue.map { Int($0.height) }
         }
     }
 }

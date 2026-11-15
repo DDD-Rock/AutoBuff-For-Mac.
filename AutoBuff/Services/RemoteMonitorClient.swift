@@ -835,7 +835,8 @@ final class RemoteMonitorClient {
     }
 
     private func applyAuthorizedModes(_ rawModes: [String]?) {
-        let parsed = Set((rawModes ?? []).compactMap(AppMode.init(rawValue:)))
+        var parsed = Set((rawModes ?? []).compactMap(AppMode.init(rawValue:)))
+        if rawModes?.contains("emulator") == true { parsed.insert(.infiniteSmoke) }
         authorizedModes = isSuperAdmin
             ? Set(AppMode.allCases)
             : (rawModes == nil ? AppMode.defaultAuthorized : parsed)

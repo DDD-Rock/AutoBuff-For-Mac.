@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+enum PortalMarkerSelection {
+    case point
+    case area
+}
+
 @available(macOS 14.0, *)
 struct PortalMarkerView: View {
     let windowID: CGWindowID
@@ -15,12 +20,20 @@ struct PortalMarkerView: View {
     var showAutoPortal = true
     var clearButtonTitle = "清除手动标记"
     var loadedStatusText = "蓝色范围=自动检测，红色范围=手动标记；两侧边界距标记点等于导航阈值"
+    var selectionMode: PortalMarkerSelection = .point
+    var existingArea: MonitorSafeZone? = nil
+    /// When supplied, the preview uses this already-confirmed crop rather than
+    /// attempting to find a minimap in the current frame again.
+    var fixedMinimapRegion: CGRect? = nil
+    var onConfirmArea: ((MonitorSafeZone?, CGRect?) -> Void)? = nil
     let onConfirm: (Int?, Int?, CGRect?) -> Void
     
     @Environment(\.dismiss) private var dismiss
     @State private var minimapImage: NSImage?
     @State private var autoPortal: CGPoint?
     @State private var manualPoint: CGPoint?
+    @State private var selectedArea: CGRect?
+    @State private var areaSelectionStart: CGPoint?
     @State private var regionSize: CGSize = .zero
     @State private var detectedRegion: CGRect?
     @State private var statusText = "加载中..."
@@ -43,44 +56,16 @@ struct PortalMarkerView: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(3)
             if let image = minimapImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.none)
-                    .frame(width: previewSize.width, height: previewSize.height)
-                    .overlay {
-                        Canvas { context, size in
-                            if showAutoPortal, let auto = autoPortal {
-                                if let range = portalRange(around: auto, in: size) {
-                                    context.fill(Path(range), with: .color(.blue.opacity(0.16)))
-                                    context.stroke(Path(range), with: .color(.blue.opacity(0.65)), lineWidth: 1)
-                                }
-                            }
-                            if let manual = manualPoint {
-                                if let range = portalRange(around: manual, in: size) {
-                                    context.fill(Path(range), with: .color(.red.opacity(0.16)))
-                                    context.stroke(Path(range), with: .color(.red.opacity(0.65)), lineWidth: 1)
-                                }
-                            }
-                            if showAutoPortal, let auto = autoPortal {
-                                let p = scaled(auto, in: size)
-                                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.blue))
-                            }
-                            if let manual = manualPoint {
-                                let p = scaled(manual, in: size)
-                                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.red))
-                            }
+                if selectionMode == .area {
+                    minimapPreview(image)
+                        .gesture(areaSelectionGesture)
+                } else {
+                    minimapPreview(image)
+                        .onTapGesture { location in
+                            guard previewScale > 0 else { return }
+                            manualPoint = CGPoint(x: location.x / previewScale, y: location.y / previewScale)
                         }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { location in
-                        guard previewScale > 0 else { return }
-                        manualPoint = CGPoint(x: location.x / previewScale, y: location.y / previewScale)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(AppTheme.border)
-                    }
+                }
             } else if let image = gameImage {
                 VStack(spacing: 7) {
                     Text("在完整游戏画面中拖动圈选小地图的大致范围")
@@ -177,10 +162,23 @@ struct PortalMarkerView: View {
                 .frame(minHeight: 28)
             }
             HStack {
-                Button(clearButtonTitle) { manualPoint = nil }
+                Button(clearButtonTitle) {
+                    manualPoint = nil
+                    selectedArea = nil
+                }
                 Spacer()
                 Button("确认") {
-                    if let manual = manualPoint {
+                    if selectionMode == .area {
+                        let zone = selectedArea.map {
+                            MonitorSafeZone(
+                                centerPixel: CGPoint(x: $0.midX, y: $0.midY),
+                                widthPixels: $0.width,
+                                heightPixels: $0.height,
+                                in: regionSize
+                            )
+                        }
+                        onConfirmArea?(zone, detectedRegion)
+                    } else if let manual = manualPoint {
                         onConfirm(Int(manual.x), Int(manual.y), detectedRegion)
                     } else {
                         onConfirm(nil, nil, nil)
@@ -211,6 +209,44 @@ struct PortalMarkerView: View {
 
     private var previewSize: CGSize {
         CGSize(width: regionSize.width * previewScale, height: regionSize.height * previewScale)
+    }
+
+    private func minimapPreview(_ image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .interpolation(.none)
+            .frame(width: previewSize.width, height: previewSize.height)
+            .overlay {
+                Canvas { context, size in
+                    if selectionMode == .area, let selectedArea {
+                        let area = scaled(selectedArea, in: size)
+                        context.fill(Path(area), with: .color(AppTheme.accent.opacity(0.18)))
+                        context.stroke(Path(area), with: .color(AppTheme.accent), lineWidth: 2)
+                    } else {
+                        if showAutoPortal, let auto = autoPortal,
+                           let range = portalRange(around: auto, in: size) {
+                            context.fill(Path(range), with: .color(.blue.opacity(0.16)))
+                            context.stroke(Path(range), with: .color(.blue.opacity(0.65)), lineWidth: 1)
+                        }
+                        if let manual = manualPoint,
+                           let range = portalRange(around: manual, in: size) {
+                            context.fill(Path(range), with: .color(.red.opacity(0.16)))
+                            context.stroke(Path(range), with: .color(.red.opacity(0.65)), lineWidth: 1)
+                        }
+                        if showAutoPortal, let auto = autoPortal {
+                            let point = scaled(auto, in: size)
+                            context.fill(Path(ellipseIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)), with: .color(.blue))
+                        }
+                        if let manual = manualPoint {
+                            let point = scaled(manual, in: size)
+                            context.fill(Path(ellipseIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)), with: .color(.red))
+                        }
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).stroke(AppTheme.border) }
     }
 
     private var gamePreviewScale: CGFloat {
@@ -257,6 +293,40 @@ struct PortalMarkerView: View {
     private func scaled(_ point: CGPoint, in size: CGSize) -> CGPoint {
         guard regionSize.width > 0, regionSize.height > 0 else { return point }
         return CGPoint(x: point.x / regionSize.width * size.width, y: point.y / regionSize.height * size.height)
+    }
+
+    private func scaled(_ rect: CGRect, in size: CGSize) -> CGRect {
+        CGRect(
+            x: rect.minX / regionSize.width * size.width,
+            y: rect.minY / regionSize.height * size.height,
+            width: rect.width / regionSize.width * size.width,
+            height: rect.height / regionSize.height * size.height
+        )
+    }
+
+    private var areaSelectionGesture: some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                let current = minimapPoint(from: value.location)
+                if areaSelectionStart == nil {
+                    areaSelectionStart = minimapPoint(from: value.startLocation)
+                }
+                guard let areaSelectionStart else { return }
+                selectedArea = normalizedSelection(from: areaSelectionStart, to: current)
+            }
+            .onEnded { value in
+                let start = areaSelectionStart ?? minimapPoint(from: value.startLocation)
+                selectedArea = normalizedSelection(from: start, to: minimapPoint(from: value.location))
+                areaSelectionStart = nil
+            }
+    }
+
+    private func minimapPoint(from previewPoint: CGPoint) -> CGPoint {
+        guard previewScale > 0 else { return .zero }
+        return CGPoint(
+            x: min(max(0, previewPoint.x / previewScale), regionSize.width),
+            y: min(max(0, previewPoint.y / previewScale), regionSize.height)
+        )
     }
 
     private func portalRange(around point: CGPoint, in size: CGSize) -> CGRect? {
@@ -329,6 +399,17 @@ struct PortalMarkerView: View {
         do {
             let captured = try await monitor.captureGameScreen()
             guard loadRequestID == requestID, isLoading else { return }
+
+            if let fixedMinimapRegion {
+                guard let region = validRegion(fixedMinimapRegion, in: captured) else {
+                    statusText = "已保存的小地图区域超出当前游戏窗口，请重新圈选。"
+                    isLoading = false
+                    return
+                }
+                try await applyDetectedRegion(region, in: captured, requestID: requestID)
+                return
+            }
+
             statusText = "正在自动识别小地图..."
 
             let detectionTask = Task.detached(priority: .userInitiated) {
@@ -462,8 +543,20 @@ struct PortalMarkerView: View {
         if let existingX, let existingY {
             manualPoint = CGPoint(x: existingX, y: existingY)
         }
+        if let existingArea {
+            selectedArea = existingArea.rect(in: regionSize)
+        }
         statusText = loadedStatusText
         isLoading = false
+    }
+
+    private func validRegion(_ region: CGRect, in source: ImageBuffer) -> CGRect? {
+        let bounds = CGRect(x: 0, y: 0, width: source.width, height: source.height)
+        let resolved = region.integral
+        guard resolved.width > 0,
+              resolved.height > 0,
+              bounds.contains(resolved) else { return nil }
+        return resolved
     }
 }
 

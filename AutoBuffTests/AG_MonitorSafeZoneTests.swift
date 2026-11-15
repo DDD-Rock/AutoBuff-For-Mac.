@@ -407,4 +407,30 @@ struct MonitorSafeZoneTests {
 
         #expect(settings.monitorSafeZone == nil)
     }
+
+    @Test func roundTripsSmokeBuffZoneThroughSettingsJSON() throws {
+        var settings = AppSettings.default
+        settings.smokeBuffZone = MonitorSafeZone(
+            center: NormalizedMapPoint(x: 0.4, y: 0.6),
+            width: 0.3,
+            height: 0.2
+        )
+
+        let data = try JSONEncoder().encode(settings)
+        let restored = try JSONDecoder().decode(AppSettings.self, from: data)
+
+        #expect(restored.smokeBuffZone == settings.smokeBuffZone)
+    }
+
+    @Test func migratesLegacySmokePointAndTolerancesToBuffZone() throws {
+        let legacy = Data(
+            #"""{"smokeAnchorX":40,"smokeAnchorY":30,"smokeMinimapRegionX":0,"smokeMinimapRegionY":0,"smokeMinimapRegionWidth":100,"smokeMinimapRegionHeight":80,"smokeHalfWidth":10,"smokeHalfHeight":5}"""#.utf8
+        )
+
+        let settings = try JSONDecoder().decode(AppSettings.self, from: legacy)
+
+        #expect(settings.smokeBuffZone?.center == NormalizedMapPoint(x: 0.4, y: 0.375))
+        #expect(settings.smokeBuffZone?.width == 0.2)
+        #expect(settings.smokeBuffZone?.height == 0.125)
+    }
 }
